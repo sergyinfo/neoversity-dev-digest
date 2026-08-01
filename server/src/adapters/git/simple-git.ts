@@ -69,6 +69,19 @@ export class SimpleGitClient implements GitClient {
     return { path: dest };
   }
 
+  async defaultBranch(repo: RepoRef): Promise<string | null> {
+    // `git clone` writes refs/remotes/origin/HEAD pointing at the upstream
+    // default branch; --short renders it as "origin/<branch>". Fails (throws)
+    // when the ref is missing, which is not an error worth failing a clone over.
+    try {
+      const ref = await this.git(repo).raw(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+      const branch = ref.trim().replace(/^origin\//, '');
+      return branch || null;
+    } catch {
+      return null;
+    }
+  }
+
   async fetchPullHead(repo: RepoRef, n: number): Promise<void> {
     // Fetch the PR head ref into a local ref (GitHub exposes pull/<n>/head).
     await this.git(repo).fetch(['origin', `pull/${n}/head:pr-${n}`]);
