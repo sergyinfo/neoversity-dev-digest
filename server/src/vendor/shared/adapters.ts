@@ -212,6 +212,14 @@ export interface GitClient {
    * subsequent index reflects the latest code. Returns the new HEAD sha.
    */
   sync(repo: RepoRef, branch: string): Promise<{ head: string }>;
+  /**
+   * Upstream default branch, read from the clone's `origin/HEAD` (set by
+   * `git clone`, shallow included). Resolved locally — no API call, so it works
+   * even when the GitHub PAT can't reach the REST API. Returns null when
+   * `origin/HEAD` is absent (e.g. a clone made before this ref existed), in
+   * which case callers keep whatever branch they already have.
+   */
+  defaultBranch(repo: RepoRef): Promise<string | null>;
   currentHead(repo: RepoRef): Promise<string>;
   diff(repo: RepoRef, base: string, head: string): Promise<UnifiedDiff>;
   /**

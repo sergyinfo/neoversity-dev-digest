@@ -55,7 +55,13 @@ export class RepoService {
     const { path } = await this.container.git.clone({ owner, name }, cloneUrl, {
       depth: CLONE_DEPTH,
     });
-    await this.repo.updateClonePath(repoId, path);
+    // `default_branch` has a column default of 'main' and is never sent by the
+    // GitHub API here (listPullRequests doesn't carry it), so a repo whose
+    // upstream default is anything else — develop, master — would silently
+    // review against the wrong base. Read it off the fresh clone's origin/HEAD;
+    // null (ref missing) leaves the existing value alone.
+    const defaultBranch = await this.container.git.defaultBranch({ owner, name });
+    await this.repo.updateClonePath(repoId, path, defaultBranch);
 
     // T2.2 — kick off the indexer in the background. ENQUEUE (not call) so the
     // clone job closes immediately and the (heavier) index runs as its own

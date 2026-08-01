@@ -69,11 +69,24 @@ export class RepoRepository {
     return row?.workspaceId ?? null;
   }
 
-  /** Persist the clone path and bump `last_polled_at` once a clone job completes. */
-  async updateClonePath(repoId: string, clonePath: string): Promise<void> {
+  /**
+   * Persist the clone path and bump `last_polled_at` once a clone job completes.
+   * `defaultBranch` is written only when the caller resolved one — passing null
+   * (unresolvable `origin/HEAD`) leaves the stored value untouched rather than
+   * clobbering it with the column default.
+   */
+  async updateClonePath(
+    repoId: string,
+    clonePath: string,
+    defaultBranch?: string | null,
+  ): Promise<void> {
     await this.db
       .update(t.repos)
-      .set({ clonePath, lastPolledAt: new Date() })
+      .set({
+        clonePath,
+        lastPolledAt: new Date(),
+        ...(defaultBranch ? { defaultBranch } : {}),
+      })
       .where(eq(t.repos.id, repoId));
   }
 

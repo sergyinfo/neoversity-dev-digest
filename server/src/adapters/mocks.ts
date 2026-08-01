@@ -249,6 +249,8 @@ export interface MockGitOptions {
   head?: string;
   /** Head `currentHead()` returns AFTER `sync()` runs — simulates fetch+reset advancing HEAD. */
   syncedHead?: string;
+  /** Upstream default branch `defaultBranch()` reports; unset → null (ref missing). */
+  defaultBranch?: string;
 }
 
 export class MockGitClient implements GitClient {
@@ -266,6 +268,9 @@ export class MockGitClient implements GitClient {
     return { path: this.clonePathFor(repo) };
   }
   async fetchPullHead(): Promise<void> {}
+  async defaultBranch(): Promise<string | null> {
+    return this.opts.defaultBranch ?? null;
+  }
   async sync(repo: RepoRef, branch: string): Promise<{ head: string }> {
     this.syncs.push({ repo, branch });
     // After a sync, HEAD advances to syncedHead (or stays at head if unset).
