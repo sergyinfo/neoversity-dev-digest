@@ -184,6 +184,19 @@ export class ReviewRunExecutor {
 
       const task = taskLine(pull) + rankNote;
 
+      // L02 — skills linked to this agent, in configured order, disabled ones
+      // already filtered in SQL. reviewer-core has always accepted `skills` and
+      // renders them as a "## Skills / rules" section; the server simply never
+      // passed them, so linking a skill in the UI changed nothing about the
+      // prompt. Best-effort: a failure here must not lose the review.
+      let skills: string[] = [];
+      try {
+        skills = await this.repo.getAgentSkillBodies(agent.id);
+        if (skills.length > 0) runLog.info(`skills: ${skills.length} linked skill(s) in prompt`);
+      } catch {
+        runLog.info('skills: lookup failed — continuing without them');
+      }
+
       // ---- Engine: assemble → single-pass → grounding -----------------------
       // The pure review pipeline lives in @devdigest/reviewer-core (shared with
       // the CI runner). The service owns only I/O: repo-intel context resolution
@@ -196,6 +209,9 @@ export class ReviewRunExecutor {
         // Per-agent review strategy (configured in the Agent editor); falls back
         // to the studio default. single-pass = whole diff in one call.
         strategy: agent.strategy ?? REVIEW_STRATEGY,
+        // L02 — same omit-when-empty contract as the digests below, so a run with
+        // no linked skills produces a byte-identical prompt to before.
+        ...(skills.length > 0 ? { skills } : {}),
         // T1.3 — pass the callers digest only when we built one. assemblePrompt
         // omits the section when this is empty/undefined.
         ...(callersDigest ? { callers: callersDigest } : {}),
