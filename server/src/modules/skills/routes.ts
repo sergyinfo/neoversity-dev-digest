@@ -28,6 +28,13 @@ const CreateSkillBody = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   type: SkillType.default('custom'),
+  /**
+   * Provenance. Limited to the two a client can legitimately claim: `manual`
+   * (typed in) and `extracted` (built from accepted conventions). `imported_url`
+   * is set only by the import route, and `community` only by an install flow —
+   * neither is self-declarable.
+   */
+  source: z.enum(['manual', 'extracted']).default('manual'),
   body: z.string().min(1),
   enabled: z.boolean().optional(),
   evidence_files: z.array(z.string()).optional(),
@@ -81,7 +88,7 @@ export default async function skillsRoutes(appBase: FastifyInstance) {
       name: b.name,
       description: b.description,
       type: b.type,
-      source: 'manual',
+      source: b.source,
       body: b.body,
       ...(b.enabled !== undefined ? { enabled: b.enabled } : {}),
       ...(b.evidence_files ? { evidenceFiles: b.evidence_files } : {}),
