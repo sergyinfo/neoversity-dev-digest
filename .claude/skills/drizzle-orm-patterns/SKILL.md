@@ -117,6 +117,27 @@ See [references/transactions.md](references/transactions.md) for advanced transa
 7. **Pagination**: Use cursor-based pagination for large datasets
 8. **Query Optimization**: Use `.limit()` and `.where()` to fetch only needed data
 
+## Severity
+
+Shared scale with `react-best-practices`, so one vocabulary covers every review.
+
+- **CRITICAL** — merge-blocking. Data loss, wrong results, or a security hole.
+  - A query on a tenant-scoped table with no tenant predicate — returns another tenant's rows.
+  - User input concatenated into `sql.raw()` instead of the templating form — injection.
+  - A multi-step write that must be atomic, executed without a transaction.
+  - A schema change with no generated migration — code and database disagree.
+  - A hand-edited migration file.
+  - `.delete()` or `.update()` with no `.where()`.
+- **HIGH** — will hurt at scale.
+  - A query inside a loop where one `inArray` would do — N+1.
+  - A foreign key or frequently filtered column with no index.
+  - Unbounded `.select()` on a growing table — no `.limit()`, no pagination.
+  - A large batch insert not chunked.
+- **MEDIUM** — types and convention.
+  - `$inferSelect` types crossing a repository boundary (see `onion-architecture`).
+  - A `references()` not written as an arrow function.
+  - A hard delete where the schema uses `deletedAt`.
+
 ## Constraints and Warnings
 
 - **Foreign Key Constraints**: Always define references using arrow functions `() => table.column` to avoid circular dependency issues

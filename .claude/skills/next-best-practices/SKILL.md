@@ -8,6 +8,27 @@ user-invocable: false
 
 Apply these rules when writing or reviewing Next.js code.
 
+## Severity
+
+Shared scale with `react-best-practices`, so one vocabulary covers every review.
+
+- **CRITICAL** — merge-blocking. Broken at runtime, or leaks data.
+  - An `async` Client Component — invalid, see [rsc-boundaries.md](./rsc-boundaries.md).
+  - Non-serializable props passed to a Client Component.
+  - `'use client'` in a root layout.
+  - A mutation performed as a render side-effect (cookies, revalidation) instead of in a Server Action.
+  - A Server Action without its own auth check — a page-level check does not cover it.
+  - A Client Component receiving more data than it renders (over-broad props leak fields).
+- **HIGH** — will hurt at scale or break a route.
+  - A data waterfall where `Promise.all` or `preload` applies.
+  - `useSearchParams` / `usePathname` without a `Suspense` boundary — forces a CSR bailout.
+  - A `route.ts` GET colliding with a `page.tsx` on the same segment.
+  - Edge runtime chosen without a reason (default is Node).
+- **MEDIUM** — quality and convention.
+  - `<img>` instead of `next/image`; fonts not via `next/font`.
+  - Missing or static metadata where `generateMetadata` fits.
+  - Inline `<script>` without an `id`.
+
 ## File Conventions
 
 See [file-conventions.md](./file-conventions.md) for:

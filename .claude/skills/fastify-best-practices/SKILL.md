@@ -66,6 +66,27 @@ Read individual rule files for detailed explanations and code examples:
 - [rules/deployment.md](rules/deployment.md) - Production deployment
 - [rules/http-proxy.md](rules/http-proxy.md) - HTTP proxying and reply.from()
 
+## Severity
+
+Shared scale with `react-best-practices`, so one vocabulary covers every review.
+
+- **CRITICAL** — merge-blocking. Wrong behaviour, or a security hole.
+  - A route accepting a body, params or query with **no schema** — unvalidated input.
+  - An authenticated route with no auth hook, or a hook registered outside the scope it is meant to protect.
+  - A response schema that serializes fields the caller must not see.
+  - An error handler that swallows the error and returns 200.
+  - A hook or handler that is `async` and also calls `done()` — double completion.
+  - Breaking encapsulation with `fastify-plugin` to leak a decorator app-wide when a scoped one would do.
+- **HIGH** — will hurt under load or on failure.
+  - A blocking/synchronous call on the request path.
+  - No rate limit on an expensive or unauthenticated route.
+  - Missing `onClose` cleanup for a resource opened in a plugin.
+  - Errors returned with the wrong status class (4xx as 5xx or vice versa).
+- **MEDIUM** — convention and clarity.
+  - Route logic that belongs in a service.
+  - Missing serialization schema (correct, just slower).
+  - Ad-hoc logging instead of the request logger.
+
 ## Core Principles
 
 - **Encapsulation**: Fastify's plugin system provides automatic encapsulation

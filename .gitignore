@@ -30,6 +30,9 @@ test-results/
 # so re-include the directory here.
 !.claude/skills/
 
+# pr-self-review verdict — per-checkout state, stamped with a commit sha.
+.claude/.pr-review-verdict.json
+
 # Agent instructions live in AGENTS.md. CLAUDE.md is a LOCAL symlink to it,
 # created by scripts/link-agents.sh (also run by scripts/dev.sh) — never
 # committed, so a Windows clone without Developer Mode can't end up with a

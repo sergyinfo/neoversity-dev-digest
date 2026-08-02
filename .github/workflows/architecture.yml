@@ -1,0 +1,90 @@
+# Architecture boundaries — the deterministic half of the pr-self-review gate.
+#
+# The skill review itself stays local (it costs model tokens per run); this job is
+# the part that can be a required status check on GitHub, which is the only thing
+# that actually blocks a merge. See .claude/skills/pr-self-review/.
+#
+# Gate semantics: `depcruise` exits 0 while rules with outstanding violations sit at
+# `warn`, so the exit code alone proves nothing. The warning COUNT is the gate — a new
+# warn-level violation is a regression even though the build is green. Baseline lives
+# in .claude/skills/onion-architecture/SKILL.md; keep the two in sync in the same PR.
+name: architecture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/architecture.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/architecture.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Raise ONLY when a rule is promoted to `error` or a violation is legitimately added
+  # with a recorded reason. Lower it whenever a migration step lands.
+  BASELINE_WARNINGS: 16
+
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: server/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # reviewer-core's raw source is aliased by server's tsconfig, and
+      # dependency-cruiser resolves through it — without its deps the graph is
+      # incomplete and rules silently under-report.
+      - name: install reviewer-core deps
+        working-directory: reviewer-core
+        run: npm ci
+
+      - name: cruise
+        id: cruise
+        run: |
+          set +e
+          pnpm lint:arch 2>&1 | tee depcruise.out
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: enforce baseline
+        run: |
+          out=$(cat depcruise.out)
+          errors=$(sed -nE 's/.*\(([0-9]+) errors?, ([0-9]+) warnings?\).*/\1/p'   <<<"$out" | tail -1)
+          warns=$( sed -nE 's/.*\(([0-9]+) errors?, ([0-9]+) warnings?\).*/\2/p'   <<<"$out" | tail -1)
+          : "${errors:=0}"; : "${warns:=0}"
+
+          echo "errors=$errors warnings=$warns baseline=$BASELINE_WARNINGS"
+
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::$errors error-severity boundary violation(s). See the log."
+            exit 1
+          fi
+          if [ "$warns" -gt "$BASELINE_WARNINGS" ]; then
+            echo "::error::Architecture warnings rose to $warns (baseline $BASELINE_WARNINGS). A new warn-level violation is a regression — severity records migration state, not permission."
+            exit 1
+          fi
+          if [ "$warns" -lt "$BASELINE_WARNINGS" ]; then
+            echo "::notice::Warnings down to $warns from $BASELINE_WARNINGS. Lower BASELINE_WARNINGS here, and promote the cleared rule to 'error' in .dependency-cruiser.cjs."
+          fi

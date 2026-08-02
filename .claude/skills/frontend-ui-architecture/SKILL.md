@@ -29,6 +29,29 @@ When the existing convention is unclear, apply the defaults here.
 Every rule below is a consequence of it. When two rules seem to conflict, the one that
 keeps co-changing code together wins.
 
+## Severity
+
+Shared scale with `react-best-practices`, so one vocabulary covers every review.
+
+- **CRITICAL** — merge-blocking. Breaks an invariant that is expensive to undo later.
+  - A cross-feature import (`features/a` → `features/b`).
+  - `'use client'` in a root layout — turns the whole app into an SPA.
+  - Business/domain logic importing React when it need not.
+  - A Server Action or data-access function with no authorization check of its own.
+- **HIGH** — fix before it spreads, not merge-blocking on its own.
+  - A new `export *` barrel.
+  - State lifted well above the components that read it.
+  - A growing set of boolean props where composition is the answer.
+  - Data fetching inside a component body rather than a hook.
+- **MEDIUM** — maintainability. Advisory in review.
+  - A file placed wider than its consumer count justifies.
+  - Shared code with a single consumer.
+  - Naming that departs from the conventions in `reference/structure.md`.
+
+Most rules in this skill are MEDIUM. That is the honest shape of structural advice:
+**layout mistakes are cheap to fix later, so they rarely justify blocking a merge.** The
+CRITICAL list above is deliberately short.
+
 ## Where does this go? (decision rule)
 
 Count the consumers. That is the whole algorithm.
