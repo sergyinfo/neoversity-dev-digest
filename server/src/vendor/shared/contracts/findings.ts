@@ -52,9 +52,9 @@ export const Finding = z.object({
   file: z.string(),
   start_line: z.number().int(),
   end_line: z.number().int(),
-  rationale: z.string(), // markdown
-  suggestion: z.string().nullish(), // markdown
-  confidence: z.number().min(0).max(1),
+  explanation: z.string(), // markdown
+  suggestion: z.string(), // markdown
+  confidence: z.number().min(0).max(1).nullable(),
   kind: FindingKind.nullish(),
   // Lethal-trifecta variant fields (present only when kind === 'lethal_trifecta')
   trifecta_components: z.array(TrifectaComponent).nullish(),
