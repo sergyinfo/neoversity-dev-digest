@@ -24,6 +24,12 @@ test-results/
 # emdash worktree config (local)
 .emdash.json
 
+# Skills are part of the repo. Some machines carry `.claude/skills` in their
+# global gitignore, which would silently drop new skills from commits while the
+# ones added earlier stay tracked — a repo .gitignore beats core.excludesFile,
+# so re-include the directory here.
+!.claude/skills/
+
 # Agent instructions live in AGENTS.md. CLAUDE.md is a LOCAL symlink to it,
 # created by scripts/link-agents.sh (also run by scripts/dev.sh) — never
 # committed, so a Windows clone without Developer Mode can't end up with a
