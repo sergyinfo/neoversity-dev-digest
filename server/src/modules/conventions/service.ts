@@ -6,6 +6,7 @@ import { ConventionRepository, toConventionDto, type InsertConvention } from './
 import { CONFIG_CANDIDATES, collectSamples, renderSamples } from './sampler.js';
 import { CONVENTIONS_SYSTEM_PROMPT, buildConventionsUserPrompt } from './prompt.js';
 import { verifyAll, type RawCandidate } from './verify.js';
+import { dedupeCandidates } from './dedupe.js';
 import { CONVENTION_SAMPLE_FILES, MIN_CONFIDENCE } from './constants.js';
 import type { ConventionExtractResult, ConventionStatus } from '@devdigest/shared';
 
@@ -103,12 +104,22 @@ export class ConventionsService {
     // ---- 3. evidence gate (no model) ---------------------------------------
     const { verified } = await verifyAll(aboveFloor as RawCandidate[], readFile);
 
+    // Models restate one rule once per file they saw it in — the first real run
+    // produced 13 candidates covering 5 distinct rules. Collapsing them keeps the
+    // extra sites as supporting evidence instead of extra cards to judge.
+    const deduped = dedupeCandidates(verified);
+
     // ---- 4. persist --------------------------------------------------------
-    const rows: InsertConvention[] = verified.map((c) => ({
+    const rows: InsertConvention[] = deduped.map((c) => ({
       workspaceId,
       repoId,
       category: c.category ?? null,
-      rule: c.rule,
+      // Extra sites are appended to the rule so they survive into the skill body
+      // — more places a rule holds is a reason to trust it.
+      rule:
+        c.also_seen_in.length > 0
+          ? `${c.rule} (also seen in ${c.also_seen_in.join(', ')})`
+          : c.rule,
       evidencePath: c.evidence_path,
       evidenceSnippet: c.evidence_snippet,
       startLine: c.start_line,
@@ -119,10 +130,12 @@ export class ConventionsService {
 
     return {
       proposed: proposed.length,
-      verified: verified.length,
-      // Counts everything the model proposed that did not survive — both the
-      // low-confidence floor and the evidence gate.
+      verified: deduped.length,
+      // Only unproven candidates. Duplicates collapsed by dedupe are reported
+      // separately — calling a merged duplicate "dropped for bad evidence" would
+      // misrepresent the extractor's accuracy in both directions.
       dropped: proposed.length - verified.length,
+      merged: verified.length - deduped.length,
       candidates: saved.map(toConventionDto),
     };
   }

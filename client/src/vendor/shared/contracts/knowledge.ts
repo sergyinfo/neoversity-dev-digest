@@ -164,7 +164,10 @@ export type ConventionCandidate = z.infer<typeof ConventionCandidate>;
 export const ConventionExtractResult = z.object({
   proposed: z.number().int(),
   verified: z.number().int(),
+  /** Proposed but unproven — failed the evidence gate or the confidence floor. */
   dropped: z.number().int(),
+  /** Verified but collapsed into another candidate stating the same rule. */
+  merged: z.number().int().default(0),
   candidates: z.array(ConventionCandidate),
 });
 export type ConventionExtractResult = z.infer<typeof ConventionExtractResult>;
