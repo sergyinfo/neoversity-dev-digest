@@ -37,6 +37,12 @@ warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
 command -v docker >/dev/null || { echo "docker not found"; exit 1; }
 command -v pnpm   >/dev/null || { echo "pnpm not found (npm i -g pnpm)"; exit 1; }
 
+# --- agent instruction links -------------------------------------------------
+# AGENTS.md is the committed file; CLAUDE.md is a gitignored symlink to it, so
+# every fresh clone needs them re-created. Best-effort: a failure here must not
+# stop the stack from booting.
+"$ROOT/scripts/link-agents.sh" >/dev/null 2>&1 || warn "could not link CLAUDE.md -> AGENTS.md (see scripts/link-agents.sh)"
+
 # --- env files ---------------------------------------------------------------
 for dir in server client; do
   if [ ! -f "$dir/.env" ] && [ -f "$dir/.env.example" ]; then

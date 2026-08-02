@@ -99,11 +99,12 @@ These are intentionally **not** in the starter — each lesson adds one back:
 ```
 
 This script:
-1. starts Postgres (`docker compose up -d`) and waits until it's healthy,
-2. creates `server/.env` and `client/.env` from `.env.example` if missing,
-3. installs deps in `server/` and `client/` (only when `node_modules` is absent),
-4. applies DB migrations and seeds demo data,
-5. launches the API (`:3001`) and the web app (`:3000`).
+1. links `CLAUDE.md` → `AGENTS.md` in every package (see [_Agent instructions_](#agent-instructions)),
+2. starts Postgres (`docker compose up -d`) and waits until it's healthy,
+3. creates `server/.env` and `client/.env` from `.env.example` if missing,
+4. installs deps in `server/` and `client/` (only when `node_modules` is absent),
+5. applies DB migrations and seeds demo data,
+6. launches the API (`:3001`) and the web app (`:3000`).
 
 Open **http://localhost:3000**. Press **Ctrl-C** to stop the dev servers —
 Postgres keeps running (`docker compose down` to stop it).
@@ -131,6 +132,27 @@ cd ../client && pnpm install && pnpm dev               # web on :3000
 `server/`: `dev` · `build` · `db:migrate` · `db:seed` · `db:generate` · `test` · `typecheck`
 (unit/integration split: `pnpm exec vitest run --exclude '**/*.it.test.ts'` / `pnpm exec vitest run .it.test`)
 `client/`: `dev` · `build` · `start` · `test` · `typecheck`
+
+## Agent instructions
+
+Per-package guidance for coding agents lives in **`AGENTS.md`** — the root one
+plus `server/`, `client/`, `reviewer-core/`, `e2e/`. That is the file to edit.
+
+Claude Code looks for `CLAUDE.md`, so each of those directories also gets a
+`CLAUDE.md` **symlink** pointing at its `AGENTS.md`: one source of truth, two
+names, no copy to keep in sync.
+
+The symlinks are **gitignored and re-created per checkout** — committing them
+would leave a Windows clone without Developer Mode holding a one-line text file
+reading `AGENTS.md` instead of a working link. `./scripts/dev.sh` creates them on
+boot; otherwise run it yourself:
+
+```sh
+./scripts/link-agents.sh           # create/refresh
+./scripts/link-agents.sh --check   # verify only, non-zero if any are missing
+```
+
+Adding a package? Add its directory to the loop in `scripts/link-agents.sh`.
 
 ## Testing & CI
 

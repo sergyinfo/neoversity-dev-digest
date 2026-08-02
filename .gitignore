@@ -23,3 +23,9 @@ test-results/
 
 # emdash worktree config (local)
 .emdash.json
+
+# Agent instructions live in AGENTS.md. CLAUDE.md is a LOCAL symlink to it,
+# created by scripts/link-agents.sh (also run by scripts/dev.sh) — never
+# committed, so a Windows clone without Developer Mode can't end up with a
+# one-line text file where the symlink should be.
+CLAUDE.md

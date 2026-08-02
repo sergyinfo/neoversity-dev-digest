@@ -16,6 +16,7 @@ user asks about FIRST — these are curated and may already answer it — then r
   check. Writes are strictly append-only (never overwrite an `INSIGHTS.md`).
 
 ## Conventions (not obvious from code)
+- Agent guidance lives in `AGENTS.md`; the sibling `CLAUDE.md` is a gitignored symlink to it, re-created by `scripts/link-agents.sh`. Edit `AGENTS.md` — never the symlink, and never add a second copy.
 - NOT a monorepo workspace — each package has its own package.json/lockfile; cross-package code is shared via tsconfig path aliases.
 - Modules are registered statically in `server/src/modules/index.ts` (no filesystem autoload).
 - ESM: relative imports carry the `.js` extension.
@@ -25,5 +26,5 @@ user asks about FIRST — these are curated and may already answer it — then r
 
 ## Use when
 - Stack, commands, architecture, how to run → read `README.md`
-- Working inside a package → read that package's CLAUDE.md: `server/CLAUDE.md`, `client/CLAUDE.md`, `reviewer-core/CLAUDE.md`, `e2e/CLAUDE.md`
+- Working inside a package → read that package's AGENTS.md: `server/AGENTS.md`, `client/AGENTS.md`, `reviewer-core/AGENTS.md`, `e2e/AGENTS.md`
 - Agent prompt templates → read `docs/agent-prompts/`
