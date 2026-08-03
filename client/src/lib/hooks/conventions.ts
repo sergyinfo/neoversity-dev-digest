@@ -128,3 +128,33 @@ export function useImportSkill() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["skills"] }),
   });
 }
+
+// ---- agent ↔ skill links ---------------------------------------------------
+
+/** Link rows for an agent, ordered. The endpoint returns links, not full skills. */
+export interface AgentSkillLinkRow {
+  agent_id: string;
+  skill_id: string;
+  order: number;
+}
+
+export function useAgentSkills(agentId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["agent-skills", agentId],
+    queryFn: () => api.get<AgentSkillLinkRow[]>(`/agents/${agentId}/skills`),
+    enabled: !!agentId,
+  });
+}
+
+/**
+ * Replaces the whole ordered set. Sending the full list (rather than one add /
+ * one remove) keeps ordering unambiguous — order is the array index server-side.
+ */
+export function useSetAgentSkills(agentId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (skillIds: string[]) =>
+      api.post<AgentSkillLinkRow[]>(`/agents/${agentId}/skills`, { skill_ids: skillIds }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agent-skills", agentId] }),
+  });
+}
