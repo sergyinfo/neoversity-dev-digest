@@ -10,8 +10,23 @@ import { withTimeout } from '../../platform/resilience.js';
  * and a full parser would accept anchors, aliases and tags from a remote
  * document we do not control.
  *
- * The body is TREATED AS UNTRUSTED — it ends up in a model prompt, so it is
- * length-capped here and the prompt assembler wraps it downstream.
+ * TRUST MODEL — read before extending this.
+ *
+ * A skill body is INSTRUCTIONS, not data. `assemblePrompt` deliberately does NOT
+ * wrap it in `<untrusted>` the way it wraps the diff, PR description and specs
+ * (`reviewer-core/src/prompt.ts:109`) — wrapping would tell the model to ignore
+ * it, which is the opposite of what a skill is for. So the injection guard does
+ * not cover this text, and `prompt.ts:42` says as much: community skills are to
+ * be "sanitized upstream". Upstream is here.
+ *
+ * What is enforced here today: a 10s timeout, a 64 KB cap, and frontmatter read
+ * by a narrow line parser rather than a YAML dependency (a full parser would
+ * accept anchors, aliases and tags from a document we do not control).
+ *
+ * What is NOT enforced, and is a real gap: the fetched text is stored verbatim.
+ * Importing a URL is therefore as trusted an act as pasting the same text into
+ * the skill editor by hand. Do not expose this endpoint to anyone you would not
+ * let edit an agent's system prompt.
  */
 
 const FETCH_TIMEOUT_MS = 10_000;
