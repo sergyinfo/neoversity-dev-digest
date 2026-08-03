@@ -12,7 +12,9 @@ import { AgentEditor } from "./_components/AgentEditor";
 import { useAgents, useAgent, useUpdateAgent } from "../../../lib/hooks/agents";
 import { ApiError } from "../../../lib/api";
 
-const VALID_TABS = ["config"];
+/** Must stay in step with `TABS` in AgentEditor/constants.ts — an unlisted tab
+ *  silently falls back to "config", which reads as a dead tab button. */
+const VALID_TABS = ["config", "skills"];
 
 export default function AgentEditorPage() {
   const params = useParams<{ id: string }>();
