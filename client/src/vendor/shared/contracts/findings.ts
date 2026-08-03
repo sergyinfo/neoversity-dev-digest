@@ -11,6 +11,20 @@ import { z } from 'zod';
 export const Severity = z.enum(['CRITICAL', 'WARNING', 'SUGGESTION']);
 export type Severity = z.infer<typeof Severity>;
 
+/**
+ * Findings tallied by severity.
+ *
+ * Every key is REQUIRED, zeros included. A counter UI has to tell "this severity
+ * has none" apart from "we didn't count" — an optional key collapses those two
+ * into the same `undefined`, and the caller ends up guessing.
+ */
+export const SeverityCounts = z.object({
+  CRITICAL: z.number().int().nonnegative(),
+  WARNING: z.number().int().nonnegative(),
+  SUGGESTION: z.number().int().nonnegative(),
+});
+export type SeverityCounts = z.infer<typeof SeverityCounts>;
+
 export const FindingCategory = z.enum(['bug', 'security', 'perf', 'style', 'test']);
 export type FindingCategory = z.infer<typeof FindingCategory>;
 

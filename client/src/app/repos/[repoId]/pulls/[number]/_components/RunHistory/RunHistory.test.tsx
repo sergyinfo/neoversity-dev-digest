@@ -5,9 +5,9 @@
  * and shows the review score ring.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
-import type { RunSummary } from "@devdigest/shared";
+import type { RunSummary, FindingRecord } from "@devdigest/shared";
 import messages from "../../../../../../../../messages/en/prReview.json";
 import { RunHistory } from "./RunHistory";
 
@@ -35,12 +35,28 @@ function run(o: Partial<RunSummary>): RunSummary {
   };
 }
 
-function renderRuns(runs: RunSummary[]) {
+function renderRuns(runs: RunSummary[], findingsByRun?: Map<string, FindingRecord[]>) {
   return render(
     <NextIntlClientProvider locale="en" messages={{ prReview: messages }}>
-      <RunHistory runs={runs} onOpenTrace={() => {}} />
+      <RunHistory runs={runs} findingsByRun={findingsByRun} onOpenTrace={() => {}} />
     </NextIntlClientProvider>,
   );
+}
+
+function finding(o: Partial<FindingRecord> & { id: string }): FindingRecord {
+  return {
+    file: "src/config.ts",
+    start_line: 12,
+    end_line: 12,
+    severity: "CRITICAL",
+    category: "security",
+    title: "Hardcoded secret committed",
+    rationale: "A literal key is committed.",
+    suggestion: null,
+    confidence: 0.97,
+    kind: "finding",
+    ...o,
+  } as FindingRecord;
 }
 
 describe("RunHistory — outcome badge", () => {
@@ -84,5 +100,62 @@ describe("RunHistory — outcome badge", () => {
     renderRuns([run({ status: "done", tokens_in: 0, tokens_out: 0, cost_usd: null, score: 80 })]);
     expect(screen.getByText("—")).toBeInTheDocument();
     expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+  });
+});
+
+describe("RunHistory — severity badges + findings preview", () => {
+  const runId = "run-1";
+
+  it("replaces the findings sentence with per-severity badges", () => {
+    renderRuns(
+      [run({ run_id: runId, status: "done", findings_count: 3, blockers: 1, score: 40 })],
+      new Map([
+        [
+          runId,
+          [
+            finding({ id: "f1", severity: "CRITICAL" }),
+            finding({ id: "f2", severity: "WARNING" }),
+            finding({ id: "f3", severity: "WARNING" }),
+          ],
+        ],
+      ]),
+    );
+    expect(screen.queryByText(/3 finding/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /3 findings on Security Reviewer: 1 critical, 2 warning/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hovering a run opens its findings, and only its own", () => {
+    renderRuns(
+      [
+        run({ run_id: "run-1", status: "done", findings_count: 1, blockers: 0, score: 70 }),
+        run({ run_id: "run-2", status: "done", findings_count: 1, blockers: 0, score: 70 }),
+      ],
+      new Map([
+        ["run-1", [finding({ id: "f1", title: "Belongs to run one" })]],
+        ["run-2", [finding({ id: "f2", title: "Belongs to run two" })]],
+      ]),
+    );
+    fireEvent.mouseEnter(screen.getAllByRole("button", { name: /findings on/i })[0]!);
+    expect(screen.getByText("Belongs to run one")).toBeInTheDocument();
+    expect(screen.queryByText("Belongs to run two")).not.toBeInTheDocument();
+  });
+
+  it("badges come from the findings themselves, so they cannot contradict the popup", () => {
+    // findings_count says 9; the actual findings say 1. The badge follows the
+    // findings, because that is what the popup will show.
+    renderRuns(
+      [run({ run_id: runId, status: "done", findings_count: 9, blockers: 0, score: 70 })],
+      new Map([[runId, [finding({ id: "f1", severity: "SUGGESTION" })]]]),
+    );
+    expect(screen.getByRole("button", { name: /^1 findings/i })).toBeInTheDocument();
+    expect(screen.queryByText("9")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the plain sentence when the findings have not been supplied", () => {
+    renderRuns([run({ status: "done", findings_count: 3, blockers: 0, score: 72 })]);
+    expect(screen.getByText(/3 finding/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /findings on/i })).not.toBeInTheDocument();
   });
 });

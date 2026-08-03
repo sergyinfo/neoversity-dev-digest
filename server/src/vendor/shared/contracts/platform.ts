@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Provider } from './knowledge.js';
+import { SeverityCounts } from './findings.js';
 
 /**
  * Platform / scaffolding DTOs owned by F1:
@@ -173,6 +174,12 @@ export const PrMeta = z.object({
   // Cost (USD) of the latest review batch (list endpoint only). null/absent
   // when the PR has no priced run yet; UI shows "—", not "$0".
   cost_usd: z.number().nullish(),
+  // Findings on the LATEST review, by severity (list endpoint only). Null until
+  // the PR has been reviewed — which is a different state from "reviewed and
+  // clean" (all-zero counts), and the list renders the two differently.
+  // Deliberately scoped to the same review that produced `score`, so the badges
+  // and the ring always describe one run rather than two different ones.
+  findings_by_severity: SeverityCounts.nullish(),
 });
 export type PrMeta = z.infer<typeof PrMeta>;
 

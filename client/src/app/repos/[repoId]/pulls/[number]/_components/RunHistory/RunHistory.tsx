@@ -3,8 +3,10 @@
 import React from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Icon, CircularScore, type IconName } from "@devdigest/ui";
-import type { RunSummary, PrCommit } from "@devdigest/shared";
+import type { RunSummary, PrCommit, FindingRecord } from "@devdigest/shared";
 import { RunCostBadge } from "@/components/RunCostBadge";
+import { FindingsPeek } from "@/components/FindingsPeek";
+import { countBySeverity } from "@/lib/findings";
 
 /**
  * PR timeline — every agent run interleaved with the PR's commits, newest-first
@@ -88,12 +90,20 @@ function tsOf(s: string | null | undefined): number {
 export function RunHistory({
   runs,
   commits = [],
+  findingsByRun,
   onOpenTrace,
   onGoToReview,
   onDelete,
 }: {
   runs: RunSummary[];
   commits?: PrCommit[];
+  /**
+   * Findings for each run, keyed by run id. The severity badges and the hover
+   * card are both derived from THIS — not from the denormalized
+   * `findings_count` on the run row — so a badge can never disagree with the
+   * list it opens.
+   */
+  findingsByRun?: Map<string, FindingRecord[]>;
   /** Open the trace + log drawer for a run (the logs icon). */
   onOpenTrace: (runId: string) => void;
   /** Jump to this run's inline review accordion below (clicking the agent name). */
@@ -189,12 +199,31 @@ export function RunHistory({
                   {r.error}
                 </div>
               )}
-              {settled && (
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  {t("runStatus.findings", { count: r.findings_count ?? 0 })}
-                  {(r.blockers ?? 0) > 0 ? t("runStatus.blockers", { count: r.blockers ?? 0 }) : ""}
-                </div>
-              )}
+              {settled &&
+                (() => {
+                  const found = findingsByRun?.get(r.run_id);
+                  // Without the findings to hand, fall back to the run row's own
+                  // count as plain text — a badge row we cannot open is worse
+                  // than the sentence it replaced.
+                  if (!found) {
+                    return (
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        {t("runStatus.findings", { count: r.findings_count ?? 0 })}
+                        {(r.blockers ?? 0) > 0
+                          ? t("runStatus.blockers", { count: r.blockers ?? 0 })
+                          : ""}
+                      </div>
+                    );
+                  }
+                  return (
+                    <FindingsPeek
+                      counts={countBySeverity(found)}
+                      items={found}
+                      blockers={r.blockers}
+                      label={r.agent_name ?? "this run"}
+                    />
+                  );
+                })()}
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
               {r.ran_at && <span>{new Date(r.ran_at).toLocaleTimeString()}</span>}

@@ -127,7 +127,16 @@ export default function PullsPage() {
             }
           />
         ) : (
-          filtered.map((pr) => <PRRow key={pr.number} pr={pr} repoId={repoId} />)
+          filtered.map((pr, i) => (
+            <PRRow
+              key={pr.number}
+              pr={pr}
+              repoId={repoId}
+              // Bottom half flips the findings card upwards; near the end of a
+              // long list a downward card would open below the fold.
+              peekPlacement={i >= Math.ceil(filtered.length / 2) ? "up" : "down"}
+            />
+          ))
         )}
       </div>
     </AppShell>

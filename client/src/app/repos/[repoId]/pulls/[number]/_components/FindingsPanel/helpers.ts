@@ -1,5 +1,10 @@
 import type { FindingRecord, Severity } from "@devdigest/shared";
-import { LOW_CONFIDENCE_THRESHOLD, SEVERITY_LEVELS, SEVERITY_ORDER } from "./constants";
+import { LOW_CONFIDENCE_THRESHOLD, SEVERITY_ORDER } from "./constants";
+
+// countBySeverity now lives in lib/findings so the PR list and the run timeline
+// can share it. Re-exported here because this panel's callers and tests have
+// always imported it from this module.
+export { countBySeverity } from "@/lib/findings";
 
 /**
  * Findings left after the confidence filter. Both the severity counters and the
@@ -8,19 +13,6 @@ import { LOW_CONFIDENCE_THRESHOLD, SEVERITY_LEVELS, SEVERITY_ORDER } from "./con
  */
 export function confidenceFiltered(findings: FindingRecord[], hideLow: boolean): FindingRecord[] {
   return hideLow ? findings.filter((f) => f.confidence >= LOW_CONFIDENCE_THRESHOLD) : findings;
-}
-
-/**
- * Count findings per severity over an already confidence-filtered set. Every
- * level in `SEVERITY_LEVELS` is present in the result (0 when absent) so the
- * chip row keeps a stable width instead of popping in and out.
- */
-export function countBySeverity(findings: FindingRecord[]): Record<Severity, number> {
-  const counts = Object.fromEntries(SEVERITY_LEVELS.map((s) => [s, 0])) as Record<Severity, number>;
-  for (const f of findings) {
-    if (f.severity in counts) counts[f.severity as Severity] += 1;
-  }
-  return counts;
 }
 
 /**
