@@ -131,6 +131,91 @@ d('Testcontainers: DB-backed routes via app.inject', () => {
     await app.close();
   });
 
+  it('GET /repos/:id/pulls carries per-severity findings for the LATEST review only', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({
+      config,
+      db: pg.handle.db,
+      overrides: { git: new MockGitClient(), github: new MockGitHubClient() },
+    });
+    const repoId = (await app.inject({ method: 'GET', url: '/repos' })).json()[0]!.id;
+    const imported = await app.inject({ method: 'GET', url: `/repos/${repoId}/pulls` });
+    const target = imported.json()[0]!;
+
+    const db = pg.handle.db;
+    const [pr] = await db
+      .select()
+      .from(t.pullRequests)
+      .where(eq(t.pullRequests.id, target.id))
+      .limit(1);
+    const workspaceId = pr!.workspaceId;
+
+    const mkReview = async (createdAt: Date) => {
+      const [row] = await db
+        .insert(t.reviews)
+        .values({
+          workspaceId,
+          prId: target.id,
+          kind: 'review',
+          verdict: 'request_changes',
+          summary: 's',
+          score: 40,
+          createdAt,
+        })
+        .returning();
+      return row!.id;
+    };
+    const mkFinding = (reviewId: string, severity: string) => ({
+      reviewId,
+      file: 'src/a.ts',
+      startLine: 1,
+      endLine: 1,
+      severity,
+      category: 'bug',
+      title: 'T',
+      rationale: 'R',
+      confidence: 0.9,
+    });
+
+    // Dates are relative to now, not fixed: the seeded PR already carries a
+    // review stamped at seed time, and a hardcoded 2026 date silently lost the
+    // "latest" race against it.
+    const now = Date.now();
+
+    // An older review with a very different mix — if the aggregate leaked across
+    // reviews, these three SUGGESTIONs would surface in the counts below.
+    const older = await mkReview(new Date(now - 86_400_000));
+    await db
+      .insert(t.findings)
+      .values([
+        mkFinding(older, 'SUGGESTION'),
+        mkFinding(older, 'SUGGESTION'),
+        mkFinding(older, 'SUGGESTION'),
+      ]);
+
+    const latest = await mkReview(new Date(now + 3_600_000));
+    await db
+      .insert(t.findings)
+      .values([
+        mkFinding(latest, 'CRITICAL'),
+        mkFinding(latest, 'CRITICAL'),
+        mkFinding(latest, 'WARNING'),
+      ]);
+
+    const list = await app.inject({ method: 'GET', url: `/repos/${repoId}/pulls` });
+    const row = list.json().find((p: { id: string }) => p.id === target.id);
+    // SUGGESTION is 0, not absent: the UI needs "none of these" to be sayable.
+    expect(row.findings_by_severity).toEqual({ CRITICAL: 2, WARNING: 1, SUGGESTION: 0 });
+
+    // A PR nobody has reviewed reports null — a different state from a clean 0/0/0.
+    const untouched = list
+      .json()
+      .find((p: { id: string; score: number | null }) => p.id !== target.id && p.score === null);
+    if (untouched) expect(untouched.findings_by_severity).toBeNull();
+
+    await app.close();
+  });
+
   it('POST /repos/:id/poll syncs PR list and does NOT trigger a review', async () => {
     const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
     const app = await buildApp({

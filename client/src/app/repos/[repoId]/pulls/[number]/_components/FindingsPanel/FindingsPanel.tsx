@@ -8,7 +8,8 @@ import { Toggle, EmptyState, Chip, SEV } from "@devdigest/ui";
 import type { FindingRecord, Severity } from "@devdigest/shared";
 import { FindingCard } from "../FindingCard";
 import { useFindingAction } from "../../../../../../../lib/hooks/reviews";
-import { KEY_TO_ACTION, SEVERITY_LEVELS } from "./constants";
+import { SEVERITY_LEVELS } from "@/lib/findings";
+import { KEY_TO_ACTION } from "./constants";
 import { confidenceFiltered, countBySeverity, visibleFindings } from "./helpers";
 import { s } from "./styles";
 
