@@ -80,6 +80,7 @@ export function PRRow({
           placement={peekPlacement}
           width={360}
           label={`#${pr.number}`}
+          variant="list"
         />
       </div>
       <div>

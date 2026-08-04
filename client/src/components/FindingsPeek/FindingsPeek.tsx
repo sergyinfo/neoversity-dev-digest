@@ -4,7 +4,7 @@ import React from "react";
 import { Icon, SEV } from "@devdigest/ui";
 import type { FindingRecord, Severity } from "@devdigest/shared";
 import { SEVERITY_LEVELS } from "@/lib/findings";
-import { DEFAULT_WIDTH } from "./constants";
+import { COUNT_METRICS, DEFAULT_WIDTH, type PeekVariant } from "./constants";
 import { FindingsTooltip } from "./FindingsTooltip";
 import { s } from "./styles";
 
@@ -28,6 +28,7 @@ export function FindingsPeek({
   width = DEFAULT_WIDTH,
   blockers,
   label,
+  variant = "timeline",
 }: {
   /** Per-severity tally. Null means "never reviewed" and renders as an em dash. */
   counts: Record<Severity, number> | null | undefined;
@@ -41,7 +42,10 @@ export function FindingsPeek({
   blockers?: number | null;
   /** What these findings belong to, for the screen-reader label. */
   label?: string;
+  /** Which of the design's two densities to draw — see COUNT_METRICS. */
+  variant?: PeekVariant;
 }) {
+  const metrics = COUNT_METRICS[variant];
   const [hovered, setHovered] = React.useState(false);
   const [pinned, setPinned] = React.useState(false);
   const open = hovered || pinned;
@@ -104,14 +108,14 @@ export function FindingsPeek({
         e.stopPropagation();
         setPinned((p) => !p);
       }}
-      style={s.host}
+      style={s.host(metrics.rowGap)}
     >
       {present.map((sv) => {
         const meta = SEV[sv];
         const SevIcon = Icon[meta.icon];
         return (
-          <span key={sv} style={s.count(meta.c)}>
-            <SevIcon size={12.5} />
+          <span key={sv} style={s.count(meta.c, metrics.gap)}>
+            <SevIcon size={metrics.icon} />
             <span className="tnum">{counts[sv]}</span>
           </span>
         );

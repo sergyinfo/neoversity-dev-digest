@@ -3,11 +3,11 @@ import type { CSSProperties } from "react";
 /** Co-located styles for FindingsPeek (ported from screen_dashboard.jsx /
  *  prdetail_runs.jsx — the counts row and its hover card). */
 export const s = {
-  host: {
+  host: (rowGap: number): CSSProperties => ({
     position: "relative",
     display: "inline-flex",
     alignItems: "center",
-    gap: 8,
+    gap: rowGap,
     width: "fit-content",
     background: "none",
     border: "none",
@@ -16,12 +16,12 @@ export const s = {
     // "help" rather than "pointer": the row underneath is the click target, this
     // only reveals detail.
     cursor: "help",
-  } satisfies CSSProperties,
+  }),
 
-  count: (color: string): CSSProperties => ({
+  count: (color: string, gap: number): CSSProperties => ({
     display: "inline-flex",
     alignItems: "center",
-    gap: 4,
+    gap,
     fontSize: 11.5,
     fontWeight: 600,
     color,
