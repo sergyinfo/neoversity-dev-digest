@@ -141,8 +141,8 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         kind: 'review',
         verdict: 'request_changes',
         summary:
-          'Solid middleware approach, but a Stripe secret key is committed in plaintext and the user-list endpoint introduces an N+1 query under the new limiter.',
-        score: 61,
+          'Solid middleware approach, but a Stripe secret key is committed in plaintext, the limiter fails open when Redis is unreachable, and the webhook route trusts a spoofable client IP. The user-list endpoint also introduces an N+1 query under the new limiter.',
+        score: 42,
         model: 'seed',
       })
       .returning();
@@ -162,6 +162,32 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
       },
       {
         reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 61,
+        endLine: 68,
+        severity: 'CRITICAL',
+        category: 'security',
+        title: 'Limiter fails open when Redis is unreachable',
+        rationale:
+          'The catch around the Redis call returns `allowed: true`, so an outage lifts the limit on every public route at once.',
+        suggestion: 'Fail closed for unauthenticated callers, or fall back to the local bucket.',
+        confidence: 0.93,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/api/public/webhooks.ts',
+        startLine: 22,
+        endLine: 29,
+        severity: 'CRITICAL',
+        category: 'security',
+        title: 'Webhook signature checked after the body is consumed',
+        rationale:
+          'The raw body is parsed before `verifySignature`, which then reads a re-serialised object — a forged payload that round-trips to the same JSON passes.',
+        suggestion: 'Verify against the raw buffer before parsing.',
+        confidence: 0.9,
+      },
+      {
+        reviewId: review!.id,
         file: 'src/api/users.ts',
         startLine: 45,
         endLine: 52,
@@ -171,6 +197,80 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         rationale: 'Loop issues one query per user → N+1.',
         suggestion: 'Use a single IN query and group in memory.',
         confidence: 0.86,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 34,
+        endLine: 38,
+        severity: 'WARNING',
+        category: 'security',
+        title: 'Bucket keyed on X-Forwarded-For without a trusted proxy',
+        rationale:
+          'The header is attacker-controlled unless the proxy overwrites it, so a caller can rotate the key and bypass the limit.',
+        suggestion: 'Use the socket address, or enable Fastify `trustProxy`.',
+        confidence: 0.81,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 78,
+        endLine: 84,
+        severity: 'WARNING',
+        category: 'perf',
+        title: 'In-memory fallback map is never evicted',
+        rationale: 'Keys are added per client but never removed, so the map grows without bound.',
+        suggestion: 'Evict on expiry, or use an LRU with a ceiling.',
+        confidence: 0.74,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 92,
+        endLine: 92,
+        severity: 'WARNING',
+        category: 'bug',
+        title: '429 response omits Retry-After',
+        rationale: 'Clients cannot tell how long to wait and typically retry immediately.',
+        suggestion: 'Send `Retry-After` with the seconds left in the window.',
+        confidence: 0.69,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 55,
+        endLine: 59,
+        severity: 'WARNING',
+        category: 'bug',
+        title: 'Read-modify-write on the counter is not atomic',
+        rationale:
+          'GET then SET can interleave across concurrent requests, letting a burst exceed the limit. Hard to confirm without knowing the deployment topology.',
+        suggestion: 'Use INCR with an expiry, or a Lua script.',
+        confidence: 0.45,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 12,
+        endLine: 14,
+        severity: 'SUGGESTION',
+        category: 'maintainability',
+        title: 'Window and limit are magic numbers',
+        rationale: 'The values are inlined, so tuning them means editing the middleware.',
+        suggestion: 'Lift them into config alongside the other limits.',
+        confidence: 0.72,
+      },
+      {
+        reviewId: review!.id,
+        file: 'src/middleware/ratelimit.ts',
+        startLine: 41,
+        endLine: 47,
+        severity: 'SUGGESTION',
+        category: 'maintainability',
+        title: 'Key-building logic is duplicated',
+        rationale: 'The same key format is assembled in two places and can drift.',
+        suggestion: 'Extract a single `bucketKey()` helper.',
+        confidence: 0.55,
       },
     ]);
   }
@@ -218,6 +318,62 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
       .from(t.agents)
       .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, a.name)));
     if (!existing) await db.insert(t.agents).values(a);
+  }
+
+  // ---- timeline run for the seeded review ----
+  // The sample review above had no `agent_runs` row, so PR #482 opened with a
+  // timeline containing a commit and nothing else: no run to show a score, a
+  // cost, or per-severity badges against. Anything that renders per run was
+  // therefore invisible on the only data a fresh install has.
+  //
+  // Runs after the agents block because the row is linked to Security Reviewer —
+  // the seeded findings are secrets/SSRF, which is that agent's brief.
+  const [seededReview] = await db
+    .select({ id: t.reviews.id, runId: t.reviews.runId, prId: t.reviews.prId })
+    .from(t.reviews)
+    .where(
+      and(
+        eq(t.reviews.workspaceId, workspaceId),
+        eq(t.reviews.kind, 'review'),
+        eq(t.reviews.model, 'seed'),
+      ),
+    );
+
+  if (seededReview && !seededReview.runId) {
+    const [securityAgent] = await db
+      .select({ id: t.agents.id, provider: t.agents.provider, model: t.agents.model })
+      .from(t.agents)
+      .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, 'Security Reviewer')));
+
+    const [run] = await db
+      .insert(t.agentRuns)
+      .values({
+        workspaceId,
+        agentId: securityAgent?.id ?? null,
+        prId: seededReview.prId,
+        provider: securityAgent?.provider ?? null,
+        model: securityAgent?.model ?? null,
+        status: 'done',
+        durationMs: 8_400,
+        tokensIn: 9_119,
+        tokensOut: 1_240,
+        costUsd: 0.0013,
+        // Must match the findings inserted above: 10 total, 3 CRITICAL. The
+        // timeline derives its badges from the findings themselves, but these
+        // denormalized counts drive the outcome badge ("rejected" vs "reviewed"),
+        // so a mismatch here would colour the row wrongly.
+        findingsCount: 10,
+        blockers: 3,
+        score: 42,
+        grounding: '10/10 passed',
+      })
+      .returning();
+
+    // Link both ways: the timeline joins run → review through this column.
+    await db
+      .update(t.reviews)
+      .set({ runId: run!.id, agentId: securityAgent?.id ?? null })
+      .where(eq(t.reviews.id, seededReview.id));
   }
 
   return { workspaceId, userId };
