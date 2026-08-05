@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { and, desc, eq, inArray } from 'drizzle-orm';
-import type { PrMeta, PrDetail, GitHubClient, PrReviewComment } from '@devdigest/shared';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import type {
+  PrMeta,
+  PrDetail,
+  GitHubClient,
+  PrReviewComment,
+  SeverityCounts,
+} from '@devdigest/shared';
 import { PrCommentInput } from '@devdigest/shared';
 import * as t from '../../db/schema.js';
 import { getContext } from '../_shared/context.js';
@@ -113,19 +119,51 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
 
     // Latest-review SCORE per PR for the list's score ring. Computed on read
     // from reviews (no FK denorm); the list is small, so one IN-query + JS
-    // grouping is cheap. (The per-severity FINDINGS breakdown is intentionally
-    // not surfaced on the list — findings live on the PR detail page.)
+    // grouping is cheap.
     const prIds = rows.map((r) => r.id);
-    const latestReviewByPr = new Map<string, { score: number | null }>();
+    const latestReviewByPr = new Map<string, { id: string; score: number | null }>();
     if (prIds.length > 0) {
       const reviewRows = await container.db
-        .select({ prId: t.reviews.prId, score: t.reviews.score })
+        .select({ id: t.reviews.id, prId: t.reviews.prId, score: t.reviews.score })
         .from(t.reviews)
         .where(and(inArray(t.reviews.prId, prIds), eq(t.reviews.kind, 'review')))
         .orderBy(desc(t.reviews.createdAt));
       // Rows are newest-first → first seen per PR is the latest review.
       for (const rv of reviewRows) {
-        if (!latestReviewByPr.has(rv.prId)) latestReviewByPr.set(rv.prId, { score: rv.score });
+        if (!latestReviewByPr.has(rv.prId))
+          latestReviewByPr.set(rv.prId, { id: rv.id, score: rv.score });
+      }
+    }
+
+    // Per-severity FINDINGS breakdown for the list's severity badges, counted
+    // over exactly the reviews chosen above — so the badges and the score ring
+    // always describe the same run. Aggregated in SQL (GROUP BY) rather than by
+    // fetching finding rows: the list only needs three integers per PR, and a
+    // busy PR can carry hundreds of findings we would otherwise ship and drop.
+    const countsByReview = new Map<string, SeverityCounts>();
+    const reviewIds = [...latestReviewByPr.values()].map((r) => r.id);
+    if (reviewIds.length > 0) {
+      const countRows = await container.db
+        .select({
+          reviewId: t.findings.reviewId,
+          severity: t.findings.severity,
+          n: count(),
+        })
+        .from(t.findings)
+        .where(inArray(t.findings.reviewId, reviewIds))
+        .groupBy(t.findings.reviewId, t.findings.severity);
+      // Seed every reviewed PR with zeros first: GROUP BY only returns severities
+      // that occur, and a reviewed-but-clean PR must read as 0/0/0, not as null.
+      for (const id of reviewIds) {
+        countsByReview.set(id, { CRITICAL: 0, WARNING: 0, SUGGESTION: 0 });
+      }
+      for (const row of countRows) {
+        const bucket = countsByReview.get(row.reviewId);
+        // `severity` is a free text column; ignore anything outside the enum
+        // rather than widening the contract to whatever the DB happens to hold.
+        if (bucket && row.severity in bucket) {
+          bucket[row.severity as keyof SeverityCounts] = row.n;
+        }
       }
     }
 
@@ -194,6 +232,7 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
         updated_at: r.updatedAt?.toISOString() ?? null,
         score: review ? review.score : null,
         cost_usd: costByPr.has(r.id) ? costByPr.get(r.id)! : null,
+        findings_by_severity: review ? (countsByReview.get(review.id) ?? null) : null,
       };
     });
   });

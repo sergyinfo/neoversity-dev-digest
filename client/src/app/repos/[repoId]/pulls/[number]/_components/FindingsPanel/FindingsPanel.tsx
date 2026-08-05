@@ -4,12 +4,13 @@
 
 import React from "react";
 import { useTranslations } from "next-intl";
-import { Toggle, EmptyState } from "@devdigest/ui";
-import type { FindingRecord } from "@devdigest/shared";
+import { Toggle, EmptyState, Chip, SEV } from "@devdigest/ui";
+import type { FindingRecord, Severity } from "@devdigest/shared";
 import { FindingCard } from "../FindingCard";
 import { useFindingAction } from "../../../../../../../lib/hooks/reviews";
+import { SEVERITY_LEVELS } from "@/lib/findings";
 import { KEY_TO_ACTION } from "./constants";
-import { visibleFindings } from "./helpers";
+import { confidenceFiltered, countBySeverity, visibleFindings } from "./helpers";
 import { s } from "./styles";
 
 export function FindingsPanel({
@@ -26,9 +27,24 @@ export function FindingsPanel({
   const t = useTranslations("prReview");
   const action = useFindingAction();
   const [hideLow, setHideLow] = React.useState(false);
+  const [severity, setSeverity] = React.useState<Severity | null>(null);
   const [focusIdx, setFocusIdx] = React.useState(0);
 
-  const shown = React.useMemo(() => visibleFindings(findings, hideLow), [findings, hideLow]);
+  // Counters are computed from the confidence-filtered set — the same set the
+  // list below is built from — so the chip numbers always sum to what's rendered.
+  const eligible = React.useMemo(
+    () => confidenceFiltered(findings, hideLow),
+    [findings, hideLow],
+  );
+  const counts = React.useMemo(() => countBySeverity(eligible), [eligible]);
+  const shown = React.useMemo(
+    () => visibleFindings(findings, hideLow, severity),
+    [findings, hideLow, severity],
+  );
+
+  // Narrowing the list can leave the j/k cursor past its end — park it back at
+  // the top whenever the filters change.
+  React.useEffect(() => setFocusIdx(0), [severity, hideLow]);
 
   // j/k navigation + a/d shortcuts on the focused finding (keyboard).
   React.useEffect(() => {
@@ -48,6 +64,20 @@ export function FindingsPanel({
   return (
     <div>
       <div style={s.toolbar}>
+        {SEVERITY_LEVELS.map((sv) => (
+          <Chip
+            key={sv}
+            active={severity === sv}
+            // Clicking the active level clears the filter — one level at a time.
+            onClick={() => setSeverity((cur) => (cur === sv ? null : sv))}
+            icon={SEV[sv].icon}
+            color={SEV[sv].c}
+            count={counts[sv]}
+          >
+            {SEV[sv].label}
+          </Chip>
+        ))}
+        <div style={s.divider} />
         <div style={s.toggleGroup}>
           {t("panel.hideLowConfidence")}
           <Toggle on={hideLow} onChange={setHideLow} size={16} />
