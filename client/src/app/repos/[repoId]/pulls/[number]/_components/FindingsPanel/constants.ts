@@ -1,7 +1,8 @@
-import type { FindingActionKind, Severity } from "@devdigest/shared";
+import type { FindingActionKind } from "@devdigest/shared";
 
-/** Severity levels offered as filter chips, in display order. */
-export const SEVERITY_LEVELS: readonly Severity[] = ["CRITICAL", "WARNING", "SUGGESTION"];
+// The filter chips read their levels from SEVERITY_LEVELS in `@/lib/findings`,
+// which the PR list and run timeline share. Kept out of this file so there is
+// one list, not three that drift.
 
 /** Sort weight per severity (lower = shown first). */
 export const SEVERITY_ORDER: Record<string, number> = {

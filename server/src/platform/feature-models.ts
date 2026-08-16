@@ -4,12 +4,15 @@ import {
   FeatureModelChoice,
   type FeatureModelId,
 } from '@devdigest/shared';
-import type { Container } from '../../platform/container.js';
-import * as t from '../../db/schema.js';
-import { rowsToSettings } from './helpers.js';
+import type { Container } from './container.js';
+import * as t from '../db/schema.js';
 
 /**
  * Per-feature model configuration.
+ *
+ * Lives in platform/, not in the settings module: nothing inside settings uses
+ * it, and every consumer is a different feature module. Keeping it under
+ * settings made each consumer a cross-module import.
  *
  * System LLM features (onboarding, intent, risk brief, conformance, conventions)
  * read their provider/model from the workspace's Settings instead of a hardcoded
@@ -42,7 +45,11 @@ export async function getFeatureModelOverride(
     .select({ key: t.settings.key, value: t.settings.value })
     .from(t.settings)
     .where(eq(t.settings.workspaceId, workspaceId));
-  const fm = (rowsToSettings(rows) as { feature_models?: Record<string, unknown> }).feature_models;
+  // Inlined rather than importing settings' helper — platform must not depend on
+  // a feature module. Four lines, and the shape is fixed by the settings schema.
+  const settings: Record<string, unknown> = {};
+  for (const r of rows) settings[r.key] = r.value;
+  const fm = (settings as { feature_models?: Record<string, unknown> }).feature_models;
   const parsed = FeatureModelChoice.safeParse(fm?.[id]);
   return parsed.success ? parsed.data : undefined;
 }

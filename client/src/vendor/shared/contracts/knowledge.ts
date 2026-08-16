@@ -141,15 +141,36 @@ export const CommunitySkill = z.object({
 export type CommunitySkill = z.infer<typeof CommunitySkill>;
 
 // ---- Conventions ----
+/** pending = nobody judged it yet; only `accepted` candidates reach a skill. */
+export const ConventionStatus = z.enum(['pending', 'accepted', 'rejected']);
+export type ConventionStatus = z.infer<typeof ConventionStatus>;
+
 export const ConventionCandidate = z.object({
   id: z.string(),
+  category: z.string().nullish(),
   rule: z.string(),
   evidence_path: z.string(),
   evidence_snippet: z.string(),
+  /** 1-based, inclusive. Drives the GitHub deep link and the evidence check. */
+  start_line: z.number().int().nullish(),
+  end_line: z.number().int().nullish(),
   confidence: z.number().min(0).max(1),
+  status: ConventionStatus,
   accepted: z.boolean(),
 });
 export type ConventionCandidate = z.infer<typeof ConventionCandidate>;
+
+/** Counts returned by an extract run — `dropped` is the evidence-gate reject count. */
+export const ConventionExtractResult = z.object({
+  proposed: z.number().int(),
+  verified: z.number().int(),
+  /** Proposed but unproven — failed the evidence gate or the confidence floor. */
+  dropped: z.number().int(),
+  /** Verified but collapsed into another candidate stating the same rule. */
+  merged: z.number().int().default(0),
+  candidates: z.array(ConventionCandidate),
+});
+export type ConventionExtractResult = z.infer<typeof ConventionExtractResult>;
 
 // ---- Agents ----
 export const Provider = z.enum(['openai', 'anthropic', 'openrouter']);

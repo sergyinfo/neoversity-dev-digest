@@ -289,6 +289,89 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     await app.close();
   });
 
+  it('L02: linked skills reach the model prompt and the run trace; unlinked runs are unchanged', async () => {
+    const { pr } = await setupRepoAndPr(pg.handle.db, workspaceId);
+    const SKILL_BODY = '## breaking-change\nFlag any removed or renamed public field.';
+
+    // Build the app around a mock we keep a handle on, so we can inspect what was
+    // actually sent to the model rather than trusting the trace alone.
+    const mock = new MockLLMProvider('openai', { structured: REVIEW_FIXTURE });
+    const app = await buildApp({
+      config: config(),
+      db: pg.handle.db,
+      overrides: {
+        embedder: new MockEmbedder(),
+        git: new MockGitClient({ diff: DIFF }),
+        llm: { openai: mock },
+      },
+    });
+
+    const agent = (
+      await app.inject({
+        method: 'POST',
+        url: '/agents',
+        payload: { name: 'Contract', provider: 'openai', model: 'gpt-4.1', system_prompt: 'base' },
+      })
+    ).json();
+
+    // ---- baseline: no skills linked ----------------------------------------
+    const before = (
+      await app.inject({ method: 'POST', url: `/pulls/${pr.id}/review`, payload: { agentId: agent.id } })
+    ).json();
+    await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
+
+    const beforeTrace = (
+      await app.inject({ method: 'GET', url: `/runs/${before.runs[0].run_id}/trace` })
+    ).json();
+    expect(beforeTrace.prompt_assembly.skills).toBeNull();
+    expect(JSON.stringify(mock.calls)).not.toContain('breaking-change');
+
+    // ---- link a skill, run again -------------------------------------------
+    const [skill] = await pg.handle.db
+      .insert(t.skills)
+      .values({
+        workspaceId,
+        name: 'breaking-change',
+        description: 'Flags removed or renamed public contract fields.',
+        type: 'convention',
+        source: 'manual',
+        body: SKILL_BODY,
+      })
+      .returning();
+
+    const linked = await app.inject({
+      method: 'POST',
+      url: `/agents/${agent.id}/skills`,
+      payload: { skill_id: skill!.id },
+    });
+    expect(linked.statusCode).toBeLessThan(300);
+
+    mock.calls.length = 0;
+    const after = (
+      await app.inject({ method: 'POST', url: `/pulls/${pr.id}/review`, payload: { agentId: agent.id } })
+    ).json();
+    await waitForPrRuns(pg.handle.db, pr.id, { expected: 2 });
+
+    // The body reached the MODEL — this is the assertion the A/B experiment rests
+    // on. Without it a "skills make no difference" result would be unfalsifiable.
+    expect(JSON.stringify(mock.calls)).toContain('breaking-change');
+
+    // ...and it is visible in the trace, which is what the demo shows.
+    const afterTrace = (
+      await app.inject({ method: 'GET', url: `/runs/${after.runs[0].run_id}/trace` })
+    ).json();
+    expect(afterTrace.prompt_assembly.skills).toContain('breaking-change');
+
+    // ---- a disabled skill must not reach the model --------------------------
+    await pg.handle.db.update(t.skills).set({ enabled: false }).where(eq(t.skills.id, skill!.id));
+    mock.calls.length = 0;
+    await app.inject({ method: 'POST', url: `/pulls/${pr.id}/review`, payload: { agentId: agent.id } });
+    await waitForPrRuns(pg.handle.db, pr.id, { expected: 3 });
+    expect(JSON.stringify(mock.calls)).not.toContain('breaking-change');
+
+    await app.close();
+  });
+
   it('run all enabled agents reviews with each enabled agent', async () => {
     const app = await appWith(REVIEW_FIXTURE);
     const { pr } = await setupRepoAndPr(pg.handle.db, workspaceId);

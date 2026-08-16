@@ -21,6 +21,7 @@ export type ReviewRow = typeof t.reviews.$inferSelect;
 import * as reviewRepo from './repository/review.repo.js';
 import * as runRepo from './repository/run.repo.js';
 import * as pullRepo from './repository/pull.repo.js';
+import * as skillRepo from './repository/skill.repo.js';
 
 export class ReviewRepository {
   constructor(private db: Db) {}
@@ -37,6 +38,13 @@ export class ReviewRepository {
 
   getPrFiles(prId: string): Promise<(typeof t.prFiles.$inferSelect)[]> {
     return pullRepo.getPrFiles(this.db, prId);
+  }
+
+  // ---- skills linked to an agent ------------------------------------------
+
+  /** Bodies of the agent's ENABLED linked skills, in configured order. */
+  getAgentSkillBodies(agentId: string): Promise<string[]> {
+    return skillRepo.getAgentSkillBodies(this.db, agentId);
   }
 
   // ---- reviews + findings -------------------------------------------------

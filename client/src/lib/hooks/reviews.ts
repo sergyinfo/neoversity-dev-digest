@@ -48,11 +48,18 @@ export function usePrRuns(prId: string | null | undefined) {
 }
 
 // ---- Persisted reviews + findings for a PR ----
-export function usePrReviews(prId: string | null | undefined) {
+/**
+ * `enabled` is opt-out so existing callers keep eager-fetching. The PR list
+ * passes `false` until a row's findings badge is actually opened: the list shows
+ * counts from its own payload, and pulling every PR's findings up front would be
+ * one request per row for detail nobody has asked to see yet. The shared query
+ * key means the PR page then reuses whatever the hover already warmed.
+ */
+export function usePrReviews(prId: string | null | undefined, enabled = true) {
   return useQuery({
     queryKey: ["reviews", prId],
     queryFn: () => api.get<ReviewRecord[]>(`/pulls/${prId}/reviews`),
-    enabled: !!prId,
+    enabled: !!prId && enabled,
   });
 }
 

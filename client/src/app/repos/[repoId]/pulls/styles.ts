@@ -40,6 +40,13 @@ export const s = {
   } satisfies CSSProperties,
   sizeBadgeBorder: (color: string): CSSProperties => ({ border: `1px solid ${color}` }),
   scoreCell: { display: "flex", alignItems: "center" } satisfies CSSProperties,
+  // `position: relative` is load-bearing: the findings card is absolutely
+  // positioned against this cell, and the row itself must not clip it.
+  findingsCell: {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+  } satisfies CSSProperties,
   costCell: {
     display: "flex",
     alignItems: "center",

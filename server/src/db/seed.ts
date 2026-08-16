@@ -320,6 +320,62 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
     if (!existing) await db.insert(t.agents).values(a);
   }
 
+  // ---- timeline run for the seeded review ----
+  // The sample review above had no `agent_runs` row, so PR #482 opened with a
+  // timeline containing a commit and nothing else: no run to show a score, a
+  // cost, or per-severity badges against. Anything that renders per run was
+  // therefore invisible on the only data a fresh install has.
+  //
+  // Runs after the agents block because the row is linked to Security Reviewer —
+  // the seeded findings are secrets/SSRF, which is that agent's brief.
+  const [seededReview] = await db
+    .select({ id: t.reviews.id, runId: t.reviews.runId, prId: t.reviews.prId })
+    .from(t.reviews)
+    .where(
+      and(
+        eq(t.reviews.workspaceId, workspaceId),
+        eq(t.reviews.kind, 'review'),
+        eq(t.reviews.model, 'seed'),
+      ),
+    );
+
+  if (seededReview && !seededReview.runId) {
+    const [securityAgent] = await db
+      .select({ id: t.agents.id, provider: t.agents.provider, model: t.agents.model })
+      .from(t.agents)
+      .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, 'Security Reviewer')));
+
+    const [run] = await db
+      .insert(t.agentRuns)
+      .values({
+        workspaceId,
+        agentId: securityAgent?.id ?? null,
+        prId: seededReview.prId,
+        provider: securityAgent?.provider ?? null,
+        model: securityAgent?.model ?? null,
+        status: 'done',
+        durationMs: 8_400,
+        tokensIn: 9_119,
+        tokensOut: 1_240,
+        costUsd: 0.0013,
+        // Must match the findings inserted above: 10 total, 3 CRITICAL. The
+        // timeline derives its badges from the findings themselves, but these
+        // denormalized counts drive the outcome badge ("rejected" vs "reviewed"),
+        // so a mismatch here would colour the row wrongly.
+        findingsCount: 10,
+        blockers: 3,
+        score: 42,
+        grounding: '10/10 passed',
+      })
+      .returning();
+
+    // Link both ways: the timeline joins run → review through this column.
+    await db
+      .update(t.reviews)
+      .set({ runId: run!.id, agentId: securityAgent?.id ?? null })
+      .where(eq(t.reviews.id, seededReview.id));
+  }
+
   return { workspaceId, userId };
 }
 
