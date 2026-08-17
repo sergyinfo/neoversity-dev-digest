@@ -8,6 +8,9 @@ import type { ReviewRepository, FindingRow, PullRow, ReviewRow } from './reposit
 import { REVIEW_STRATEGY } from './constants.js';
 import { taskLine } from './helpers.js';
 import { loadDiff } from './diff-loader.js';
+// Leaf module (contract types only) — importing it does not create a cycle with
+// intent/service.ts, which depends on this module's diff-loader.
+import { renderIntentBlock } from '../intent/block.js';
 
 /** Thrown by a run when the user cancels it mid-flight (between map files). */
 export class RunCancelledError extends Error {
@@ -105,6 +108,26 @@ export class ReviewRunExecutor {
     }
     runLog.info(`Diff ready — ${diff.files.length} changed file(s); starting ${jobs.length} agent run(s)`);
 
+    // Read the stored intent ONCE per PR, not per agent — every agent reviews the
+    // same PR, so re-reading it per run would buy nothing.
+    //
+    // Deliberately a READ, never a derivation: intent is derived when the PR is
+    // imported (GET /pulls/:id), so a review never pays for a model call it did
+    // not ask for. Missing intent is not a failure — the prompt simply omits the
+    // section and is byte-identical to a pre-Intent-Layer run. Note this must NOT
+    // go through failAll: unlike the diff, intent is enrichment.
+    let intentBlock: string | undefined;
+    try {
+      intentBlock = renderIntentBlock(await this.repo.getIntent(pull.id));
+      runLog.info(
+        intentBlock
+          ? 'PR intent loaded — injecting it as untrusted context'
+          : 'No stored PR intent — reviewing without the intent section',
+      );
+    } catch (err) {
+      runLog.error(`Could not load PR intent: ${(err as Error).message} — continuing without it`);
+    }
+
     for (const { agent, runId } of jobs) {
       const agentStart = Date.now();
       logger?.info(
@@ -112,7 +135,16 @@ export class ReviewRunExecutor {
         `review: agent "${agent.name}" started (${agent.provider}/${agent.model})`,
       );
       try {
-        const outcome = await this.runOneAgent(workspaceId, pull, repo, diff, agent, runId, runLog);
+        const outcome = await this.runOneAgent(
+          workspaceId,
+          pull,
+          repo,
+          diff,
+          agent,
+          runId,
+          runLog,
+          intentBlock,
+        );
         logger?.info(
           {
             runId,
@@ -144,6 +176,7 @@ export class ReviewRunExecutor {
     agent: AgentRow,
     runId: string,
     parentLog: RunLogger,
+    intentBlock?: string,
   ): Promise<RunOutcome> {
     const start = Date.now();
     // Narrow the fanned-out pre-work logger to THIS run; the shared diff/intent
@@ -220,6 +253,10 @@ export class ReviewRunExecutor {
         // PR author's description/body — untrusted; assemblePrompt wraps +
         // truncates it. Omitted when the PR has no body.
         ...(pull.body ? { prDescription: pull.body } : {}),
+        // L03 — derived PR intent, same omit-when-empty contract. Already
+        // rendered (and empty-checked) by renderIntentBlock, so a PR with a blank
+        // stored intent still produces a byte-identical prompt.
+        ...(intentBlock ? { intent: intentBlock } : {}),
         task,
         sessionId: `${repo.owner}/${repo.name}#${pull.number}:${agent.name}`,
         onEvent: (e) => runLog.event(e.kind, e.msg, e.data),

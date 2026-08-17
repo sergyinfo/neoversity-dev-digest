@@ -89,7 +89,7 @@ function composeBody(
     const emoji = SEV_EMOJI[f.severity] ?? '•';
     const loc = `\`${f.file}:${f.start_line}${f.end_line !== f.start_line ? `-${f.end_line}` : ''}\``;
     const sugg = f.suggestion ? `\n  - _Suggestion:_ ${f.suggestion}` : '';
-    return `- ${emoji} **${f.title}** (${f.severity.toLowerCase()}, ${f.category}) — ${loc}\n  - ${f.rationale}${sugg}`;
+    return `- ${emoji} **${f.title}** (${f.severity.toLowerCase()}, ${f.category}) — ${loc}\n  - ${f.explanation}${sugg}`;
   });
 
   const summary = `**${findings.length} finding${findings.length === 1 ? '' : 's'}** · ${severityCounts(findings)}`;
@@ -137,7 +137,7 @@ function inlineComments(
     out.push({
       path: f.file,
       line,
-      body: `**${f.title}** (${f.severity.toLowerCase()})\n\n${f.rationale}${
+      body: `**${f.title}** (${f.severity.toLowerCase()})\n\n${f.explanation}${
         f.suggestion ? `\n\n_Suggestion:_ ${f.suggestion}` : ''
       }`,
     });

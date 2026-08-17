@@ -26,6 +26,12 @@ const EnvSchema = z.object({
   // Note: even when on, sections only populate once the repo is indexed; an
   // unindexed repo degrades gracefully. Per-agent override: agents.repo_intel.
   REPO_INTEL_ENABLED: z.string().optional(),
+  // Intent Layer: follow external http(s) links found in a PR description to
+  // pull in a referenced plan/spec. Default OFF — the URL comes from
+  // author-controlled text, so enabling it turns the API into an SSRF proxy on
+  // someone else's input. Repo-file and GitHub-issue references do NOT need
+  // this flag; they never leave the clone or the already-authenticated API.
+  INTENT_EXTERNAL_FETCH_ENABLED: z.string().optional(),
   API_PORT: z.coerce.number().int().default(3001),
   WEB_PORT: z.coerce.number().int().default(3000),
   DEVDIGEST_CLONE_DIR: z.string().optional(),
@@ -59,6 +65,12 @@ export type AppConfig = {
    * EXACTLY like the ripgrep-only baseline.
    */
   repoIntelEnabled: boolean;
+  /**
+   * Whether the Intent Layer may fetch EXTERNAL http(s) references found in a
+   * PR description. Default false. Off ⇒ `container.webFetch` throws
+   * ConfigError, and the reference resolver skips url-kind references.
+   */
+  intentExternalFetchEnabled: boolean;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -77,5 +89,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webOrigin: `http://localhost:${parsed.WEB_PORT}`,
     embeddingsEnabled: parsed.EMBEDDINGS_ENABLED === 'true',
     repoIntelEnabled: parsed.REPO_INTEL_ENABLED !== 'false',
+    intentExternalFetchEnabled: parsed.INTENT_EXTERNAL_FETCH_ENABLED === 'true',
   };
 }

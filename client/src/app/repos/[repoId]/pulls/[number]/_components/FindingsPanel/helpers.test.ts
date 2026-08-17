@@ -11,7 +11,7 @@ function finding(over: Partial<FindingRecord> & { id: string }): FindingRecord {
     file: "src/a.ts",
     start_line: 1,
     end_line: 1,
-    rationale: "because",
+    explanation: "because",
     suggestion: null,
     confidence: 0.9,
     kind: "finding",

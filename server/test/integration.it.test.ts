@@ -173,6 +173,8 @@ d('Testcontainers: DB-backed routes via app.inject', () => {
       severity,
       category: 'bug',
       title: 'T',
+      // Drizzle column key — the DB column is still `rationale` (the contract
+      // field is `explanation`; they are mapped at the repository boundary).
       rationale: 'R',
       confidence: 0.9,
     });

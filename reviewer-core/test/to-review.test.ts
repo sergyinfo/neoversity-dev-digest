@@ -16,7 +16,7 @@ function finding(severity: Finding['severity']): Finding {
     file: 'src/x.ts',
     start_line: 1,
     end_line: 1,
-    rationale: 'because',
+    explanation: 'because',
   } as Finding;
 }
 
@@ -105,7 +105,7 @@ function findingRange(file: string, start: number, end: number): Finding {
     file,
     start_line: start,
     end_line: end,
-    rationale: 'because',
+    explanation: 'because',
   } as Finding;
 }
 

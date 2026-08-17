@@ -68,7 +68,7 @@ export const Finding = z.object({
   end_line: z.number().int(),
   explanation: z.string(), // markdown
   suggestion: z.string(), // markdown
-  confidence: z.number().min(0).max(1).nullable(),
+  confidence: z.number().min(0).max(1),
   kind: FindingKind.nullish(),
   // Lethal-trifecta variant fields (present only when kind === 'lethal_trifecta')
   trifecta_components: z.array(TrifectaComponent).nullish(),

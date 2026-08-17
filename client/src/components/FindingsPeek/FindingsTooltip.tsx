@@ -51,7 +51,7 @@ export function FindingsTooltip({
                 <ConfidenceNum value={f.confidence} />
               </span>
             </div>
-            <div style={s.itemBody}>{stripMd(f.rationale)}</div>
+            <div style={s.itemBody}>{stripMd(f.explanation)}</div>
           </div>
         ))}
       </div>

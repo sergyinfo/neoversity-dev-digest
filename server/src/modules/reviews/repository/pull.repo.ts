@@ -33,6 +33,13 @@ export async function getPrFiles(
   return db.select().from(t.prFiles).where(eq(t.prFiles.prId, prId));
 }
 
+export async function getPrCommits(
+  db: Db,
+  prId: string,
+): Promise<(typeof t.prCommits.$inferSelect)[]> {
+  return db.select().from(t.prCommits).where(eq(t.prCommits.prId, prId));
+}
+
 /**
  * Record the commit a review just ran against, so the PR list can derive
  * `reviewed` vs `needs_review` (head moved since the last review) vs `stale`.
@@ -46,23 +53,66 @@ export async function markReviewed(db: Db, prId: string, sha: string): Promise<v
 
 // ---- intent ---------------------------------------------------------------
 
-export async function upsertIntent(db: Db, prId: string, intent: Intent): Promise<void> {
+/** Derivation provenance stored alongside the intent itself. */
+export interface IntentProvenance {
+  headSha?: string | null;
+  model?: string | null;
+}
+
+export async function upsertIntent(
+  db: Db,
+  prId: string,
+  intent: Intent,
+  provenance: IntentProvenance = {},
+): Promise<void> {
+  const values = {
+    prId,
+    intent: intent.intent,
+    inScope: intent.in_scope,
+    outOfScope: intent.out_of_scope,
+    // The column is NOT NULL with a 'low' default; a writer that omits the band
+    // must land on the cautious end rather than inheriting the previous row's.
+    confidence: intent.confidence ?? ('low' as const),
+    sources: intent.sources ?? [],
+    headSha: provenance.headSha ?? null,
+    model: provenance.model ?? null,
+    // Re-derivation must refresh the age shown in the UI; the column default
+    // only applies on INSERT.
+    derivedAt: new Date(),
+  };
   await db
     .insert(t.prIntent)
-    .values({
-      prId,
-      intent: intent.intent,
-      inScope: intent.in_scope,
-      outOfScope: intent.out_of_scope,
-    })
+    .values(values)
     .onConflictDoUpdate({
       target: t.prIntent.prId,
-      set: { intent: intent.intent, inScope: intent.in_scope, outOfScope: intent.out_of_scope },
+      set: {
+        intent: values.intent,
+        inScope: values.inScope,
+        outOfScope: values.outOfScope,
+        confidence: values.confidence,
+        sources: values.sources,
+        headSha: values.headSha,
+        model: values.model,
+        derivedAt: values.derivedAt,
+      },
     });
 }
 
-export async function getIntent(db: Db, prId: string): Promise<Intent | undefined> {
+/** The stored intent plus its provenance, or undefined when never derived. */
+export async function getIntent(
+  db: Db,
+  prId: string,
+): Promise<(Intent & IntentProvenance & { derivedAt: Date }) | undefined> {
   const [row] = await db.select().from(t.prIntent).where(eq(t.prIntent.prId, prId));
   if (!row) return undefined;
-  return { intent: row.intent, in_scope: row.inScope, out_of_scope: row.outOfScope };
+  return {
+    intent: row.intent,
+    in_scope: row.inScope,
+    out_of_scope: row.outOfScope,
+    confidence: row.confidence,
+    sources: row.sources as Intent['sources'],
+    headSha: row.headSha,
+    model: row.model,
+    derivedAt: row.derivedAt,
+  };
 }

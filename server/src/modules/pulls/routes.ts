@@ -9,6 +9,7 @@ import type {
   SeverityCounts,
 } from '@devdigest/shared';
 import { PrCommentInput } from '@devdigest/shared';
+import { IntentService } from '../intent/service.js';
 import * as t from '../../db/schema.js';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
@@ -295,7 +296,12 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
         })
         .where(eq(t.pullRequests.id, pr.id));
 
-      return { ...detail, id: pr.id };
+      // Intent rides along on the detail payload. `detail.head_sha` — not
+      // `pr.headSha` — is the freshly fetched head, and the update above
+      // deliberately does NOT write it back, so comparing against the stored
+      // column here would mean the intent cache never invalidates.
+      const intent = await deriveIntentForDetail(pr.id, detail.head_sha);
+      return { ...detail, id: pr.id, intent };
     } catch (err) {
       app.log.warn({ err }, 'GitHub PR detail refresh skipped (no token / offline); serving persisted detail');
       const files = await container.db.select().from(t.prFiles).where(eq(t.prFiles.prId, pr.id));
@@ -327,7 +333,29 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
           author: c.author,
           committed_at: c.committedAt?.toISOString() ?? null,
         })),
+        intent: await deriveIntentForDetail(pr.id, pr.headSha),
       };
+    }
+
+    /**
+     * Lazily derive the PR's intent, and never let that break opening a PR.
+     *
+     * Skipped under NODE_ENV=test: this endpoint is on the deterministic e2e
+     * path (`e2e/specs/02-repo-pulls-detail.flow.json` opens a PR and waits for
+     * networkidle), and e2e/CLAUDE.md requires those flows to call no LLM. On a
+     * machine with a key configured an unguarded call would both spend money and
+     * risk stalling past networkidle.
+     */
+    async function deriveIntentForDetail(prId: string, headSha: string | null) {
+      if (container.config.nodeEnv === 'test') return null;
+      try {
+        return await new IntentService(container, req.log).getOrCompute(workspaceId, prId, {
+          headSha,
+        });
+      } catch (err) {
+        req.log.warn({ err, prId }, 'intent derivation skipped; serving PR detail without it');
+        return null;
+      }
     }
   });
 

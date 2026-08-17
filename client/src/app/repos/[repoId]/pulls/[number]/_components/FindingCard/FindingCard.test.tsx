@@ -15,7 +15,7 @@ const FINDING: FindingRecord = {
   file: "src/config.ts",
   start_line: 11,
   end_line: 11,
-  rationale: "A **live** Stripe key is committed in source.",
+  explanation: "A **live** Stripe key is committed in source.",
   suggestion: "Move the key to an environment variable.",
   confidence: 0.95,
   kind: "finding",

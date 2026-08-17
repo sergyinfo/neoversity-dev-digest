@@ -107,5 +107,30 @@
     "goToReview": "Jump to this run’s findings below",
     "openTrace": "Open run trace & logs",
     "deleteRun": "Delete run"
+  },
+  "intent": {
+    "title": "Intent",
+    "inScope": "IN SCOPE",
+    "outOfScope": "OUT OF SCOPE",
+    "noneListed": "None listed.",
+    "derivedFrom": "Derived from",
+    "recompute": "Recompute",
+    "derive": "Derive intent",
+    "emptyTitle": "No intent derived yet",
+    "emptyBody": "Derive what this PR is for from its title, description, linked ticket and any referenced plan.",
+    "failed": "Could not derive the intent. Check that a model is configured in Settings → Feature Models.",
+    "confidence": {
+      "high": "High confidence",
+      "medium": "Medium confidence",
+      "low": "Low confidence"
+    },
+    "source": {
+      "spec": "plan / spec",
+      "linked_issue": "linked ticket",
+      "pr_description": "PR description",
+      "commits": "commits",
+      "branch": "branch name",
+      "file_paths": "changed files"
+    }
   }
 }

@@ -52,6 +52,23 @@ export const prIntent = pgTable('pr_intent', {
   intent: text('intent').notNull(),
   inScope: jsonb('in_scope').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   outOfScope: jsonb('out_of_scope').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  /**
+   * Trust band for the derivation. Defaults to the LOWEST band so rows written
+   * before the Intent Layer (and any future writer that forgets it) read as
+   * weakly-evidenced rather than silently authoritative.
+   */
+  confidence: text('confidence', { enum: ['high', 'medium', 'low'] })
+    .notNull()
+    .default('low'),
+  /** Which signals the intent was derived from (IntentSource[]). */
+  sources: jsonb('sources').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  /** Head the intent was derived against; a moved head marks it stale. */
+  headSha: text('head_sha'),
+  /** Model that produced it, for auditing a cheap-tier classification. */
+  model: text('model'),
+  // Written out in full rather than via the `now()` helper, which hardcodes the
+  // column name `created_at`.
+  derivedAt: timestamp('derived_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const prBrief = pgTable('pr_brief', {

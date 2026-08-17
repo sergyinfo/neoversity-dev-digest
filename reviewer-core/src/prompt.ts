@@ -66,6 +66,18 @@ export interface PromptParts {
    * undefined → section omitted.
    */
   prDescription?: string;
+  /**
+   * The PR's DERIVED intent block (Intent Layer): what the PR claims to be for,
+   * plus which areas the author treats as focal vs peripheral.
+   *
+   * Untrusted, and doubly so: it is produced by a model reading author-controlled
+   * text, so it inherits every injection vector `prDescription` has. Rendered
+   * last before the diff, delimiter-wrapped. It is context for PRIORITIZATION
+   * only — INJECTION_GUARD already names "derived intent/scope" as data that can
+   * never turn a real defect into zero findings. Empty/undefined → section
+   * omitted (byte-identical prompt to before the Intent Layer existed).
+   */
+  intent?: string;
   /** The unified diff / user task (untrusted content). */
   diff: string;
   /** Optional task framing line, e.g. "Review PR #482 '…'". */
@@ -117,6 +129,9 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
       `## Callers of changed symbols\n${wrapUntrusted('callers', parts.callers)}`,
     );
   }
+  if (parts.intent && parts.intent.trim().length > 0) {
+    userSections.push(`## PR intent\n${wrapUntrusted('pr-intent', parts.intent)}`);
+  }
   userSections.push(`## Diff to review\n${wrapUntrusted('diff', parts.diff)}`);
 
   const user = userSections.join('\n\n');
@@ -134,6 +149,7 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
     callers: parts.callers ?? null,
     repo_map: parts.repoMap ?? null,
     pr_description: prDescription ?? null,
+    intent: parts.intent ?? null,
     user,
   };
 

@@ -24,6 +24,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 - **2026-08-02** — `client/specs/DevDigest Design (standalone).html` is the canonical design source, but `grep` finds NOTHING in it: the UI code is gzip+base64 inside a JSON resource map on a single 1.7 MB line (`<script type="__bundler/manifest">`, line 170). To read a component's reference implementation, JSON-parse that line and per entry `base64.b64decode` → `gzip.decompress`; the `text/javascript` resources come out as plain readable source (`FindingsPanel`, `Chip`, `SEV`, …). `file://` URLs are blocked in the browser tool, so decoding beats opening it.
 - **2026-08-02** — The `Toggle` primitive renders `role="switch"`, so `screen.getByRole("switch")` is the stable handle in tests — it has no label text to query by. Evidence: `client/src/vendor/ui/primitives/Toggle.tsx:15`.
+- **2026-08-17** — `ConfidenceNum` (`vendor/ui/primitives/ConfidenceNum.tsx`) is **percentage-only**: it takes a 0..1 float and renders `"87% conf"`. It is the wrong primitive for a confidence that is a categorical BAND (e.g. `PrIntentRecord.confidence` is `'high'|'medium'|'low'`) — mapping a band to a fake number just to reuse it reintroduces the invented precision the enum exists to avoid. Use `Badge` with `icon`/`color` and the level as a word (see `_components/IntentCard/constants.ts`).
+- **2026-08-17** — The `Button` primitive's variant prop is **`kind`**, not `variant` (`kind?: "primary"|"secondary"|"tertiary"|"ghost"|"danger"`, `vendor/ui/primitives/tokens.ts:26`). `variant` typechecks as an unknown prop and fails the build, not silently.
 
 ## Recurring Errors & Fixes
 

@@ -40,8 +40,10 @@ export function findingRowToDto(row: FindingRow): ReviewDtoFinding {
     file: row.file,
     start_line: row.startLine,
     end_line: row.endLine,
-    rationale: row.rationale,
-    suggestion: row.suggestion ?? null,
+    // The DB column is still `rationale`; the contract field is `explanation`.
+    // Mapping at this boundary avoids a rename + backfill of a populated column.
+    explanation: row.rationale,
+    suggestion: row.suggestion ?? '',
     confidence: row.confidence,
     kind: (row.kind as Finding['kind']) ?? 'finding',
     trifecta_components: (row.trifectaComponents as Finding['trifecta_components']) ?? null,
