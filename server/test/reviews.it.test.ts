@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startPg, dockerAvailable, type PgFixture } from './helpers/pg.js';
-import { waitForPrRuns } from './helpers/runs.js';
+import { waitForPrRuns, waitForTrace } from './helpers/runs.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/platform/config.js';
 import { seed } from '../src/db/seed.js';
@@ -199,7 +199,11 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
 
     // a run_traces document was written (single doc)
     const runId = body.runs[0].run_id;
-    const trace = (await app.inject({ method: 'GET', url: `/runs/${runId}/trace` })).json();
+    const trace = await waitForTrace<{
+      config: { model: string };
+      stats: { grounding: string };
+      log: unknown[];
+    }>(app, runId);
     expect(trace.config.model).toBe('gpt-4.1');
     expect(trace.stats.grounding).toBe('1/2 passed');
     expect(trace.log.length).toBeGreaterThan(0);
@@ -321,9 +325,10 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     ).json();
     await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
 
-    const beforeTrace = (
-      await app.inject({ method: 'GET', url: `/runs/${before.runs[0].run_id}/trace` })
-    ).json();
+    const beforeTrace = await waitForTrace<{ prompt_assembly: { skills: string | null } }>(
+      app,
+      before.runs[0].run_id,
+    );
     expect(beforeTrace.prompt_assembly.skills).toBeNull();
     expect(JSON.stringify(mock.calls)).not.toContain('breaking-change');
 
@@ -358,9 +363,10 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     expect(JSON.stringify(mock.calls)).toContain('breaking-change');
 
     // ...and it is visible in the trace, which is what the demo shows.
-    const afterTrace = (
-      await app.inject({ method: 'GET', url: `/runs/${after.runs[0].run_id}/trace` })
-    ).json();
+    const afterTrace = await waitForTrace<{ prompt_assembly: { skills: string | null } }>(
+      app,
+      after.runs[0].run_id,
+    );
     expect(afterTrace.prompt_assembly.skills).toContain('breaking-change');
 
     // ---- a disabled skill must not reach the model --------------------------

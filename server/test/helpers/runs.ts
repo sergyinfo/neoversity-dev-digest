@@ -11,6 +11,32 @@ import type { PgFixture } from './pg.js';
  */
 const TERMINAL = new Set(['done', 'failed', 'cancelled']);
 
+/**
+ * Wait for a run's TRACE, not just for the run to reach a terminal status.
+ *
+ * `run-executor` calls `completeAgentRun` BEFORE `saveRunTrace`, so a run is
+ * already 'done' for a moment while `run_traces` is still empty. Reading the
+ * trace straight after `waitForPrRuns` is therefore a race, and it is the one
+ * that made `reviews.it.test.ts`'s skills assertion flaky under load — it only
+ * loses the race when the suite runs its files in parallel.
+ *
+ * Returns whatever the last poll saw once `timeoutMs` elapses, so a genuinely
+ * missing trace still fails on the caller's own assertion rather than here.
+ */
+export async function waitForTrace<T = unknown>(
+  app: { inject: (o: { method: string; url: string }) => Promise<{ json: <R>() => R }> },
+  runId: string,
+  timeoutMs = 10_000,
+): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const trace = (await app.inject({ method: 'GET', url: `/runs/${runId}/trace` })).json<T>();
+    if ((trace as { prompt_assembly?: unknown } | null)?.prompt_assembly) return trace;
+    if (Date.now() - start > timeoutMs) return trace;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 export async function waitForPrRuns(
   db: PgFixture['handle']['db'],
   prId: string,

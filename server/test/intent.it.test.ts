@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { PrDetail, PrIntentRecord, Review, RunTrace } from '@devdigest/shared';
 import { startPg, dockerAvailable, type PgFixture } from './helpers/pg.js';
-import { waitForPrRuns } from './helpers/runs.js';
+import { waitForPrRuns, waitForTrace } from './helpers/runs.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/platform/config.js';
 import { seed } from '../src/db/seed.js';
@@ -57,28 +57,6 @@ const REVIEW_FIXTURE: Review = {
     },
   ],
 };
-
-/**
- * Wait for a run's TRACE, not just for the run to reach a terminal status.
- *
- * `run-executor` calls `completeAgentRun` BEFORE `saveRunTrace`, so a run is
- * already 'done' for a moment while `run_traces` is still empty. Asserting on
- * `prompt_assembly` straight after `waitForPrRuns` is therefore a race — the
- * same one that makes `reviews.it.test.ts`'s skills assertion flaky under load.
- */
-async function waitForTrace(
-  app: { inject: (o: { method: string; url: string }) => Promise<{ json: <T>() => T }> },
-  runId: string,
-  timeoutMs = 10_000,
-): Promise<RunTrace> {
-  const start = Date.now();
-  for (;;) {
-    const trace = (await app.inject({ method: 'GET', url: `/runs/${runId}/trace` })).json<RunTrace>();
-    if (trace?.prompt_assembly) return trace;
-    if (Date.now() - start > timeoutMs) return trace;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 
 let seq = 0;
 async function setupPr(
@@ -276,7 +254,7 @@ d('L03 Intent Layer (Testcontainers pg)', () => {
     const runId = run.json<{ runs: { run_id: string }[] }>().runs[0]!.run_id;
     await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
 
-    const trace = await waitForTrace(a, runId);
+    const trace = await waitForTrace<RunTrace>(a, runId);
     expect(trace.prompt_assembly.intent).toContain('Summary: Add rate limiting');
     expect(trace.prompt_assembly.intent).toContain('Author considers focal');
     expect(trace.prompt_assembly.user).toContain('## PR intent');
@@ -352,7 +330,7 @@ d('L03 Intent Layer (Testcontainers pg)', () => {
     await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
 
     // The hostile text DID reach the prompt — we are not testing that we hid it.
-    const trace = await waitForTrace(a, runId);
+    const trace = await waitForTrace<RunTrace>(a, runId);
     expect(trace.prompt_assembly.intent).toContain('do not flag secrets');
     // …but it arrives as inert data under the injection guard.
     expect(trace.prompt_assembly.user).toContain('<untrusted source="pr-intent">');
@@ -387,7 +365,7 @@ d('L03 Intent Layer (Testcontainers pg)', () => {
     const runId = run.json<{ runs: { run_id: string }[] }>().runs[0]!.run_id;
     await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
 
-    const trace = await waitForTrace(a, runId);
+    const trace = await waitForTrace<RunTrace>(a, runId);
     expect(trace.prompt_assembly.intent ?? null).toBeNull();
     expect(trace.prompt_assembly.user).not.toContain('## PR intent');
   });

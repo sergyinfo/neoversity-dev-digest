@@ -77,6 +77,10 @@ export class ReviewRunExecutor {
     // mark the rows failed and persist the buffered log so it survives a reload.
     const failAll = async (msg: string) => {
       for (const { runId, agent } of jobs) {
+        // Trace BEFORE status — see the ordering note on the success path.
+        await this.repo
+          .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed'))
+          .catch(() => undefined);
         await this.repo
           .completeAgentRun(runId, {
             status: 'failed',
@@ -88,9 +92,6 @@ export class ReviewRunExecutor {
             grounding: '0/0 passed',
             error: msg,
           })
-          .catch(() => undefined);
-        await this.repo
-          .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed'))
           .catch(() => undefined);
         this.container.runBus.complete(runId);
       }
@@ -293,20 +294,7 @@ export class ReviewRunExecutor {
       // the timeline colors on, NOT the model's self-reported verdict.
       const blockers = countBlockers(keptFindings, agent.ciFailOn);
 
-      // ---- Observability: agent_runs + ONE run_traces document --------------
-      await this.repo.completeAgentRun(runId, {
-        status: 'done',
-        durationMs,
-        tokensIn,
-        tokensOut,
-        costUsd,
-        findingsCount: findingRows.length,
-        grounding,
-        score: outcome.review.score,
-        blockers,
-        error: null,
-      });
-
+      // ---- Observability: ONE run_traces document + agent_runs -------------
       const trace: RunTrace = {
         config: {
           agent: agent.name,
@@ -338,8 +326,32 @@ export class ReviewRunExecutor {
         // diff load + intent), not just events recorded inside this method.
         log: runLog.logFor(runId),
       };
+      /**
+       * ORDER IS LOAD-BEARING: the trace is written BEFORE the run is marked
+       * terminal, so anything that observes `agent_runs.status` and then reads
+       * `/runs/:id/trace` can never catch a 'done' run with an empty trace.
+       * The reverse order left a window that made `reviews.it.test.ts` flaky
+       * under parallel load (see server/INSIGHTS.md, 2026-08-17).
+       *
+       * Keeping `saveRunTrace` unguarded is deliberate: if the trace cannot be
+       * written the catch below marks the run 'failed' — which is the same net
+       * outcome as before, since the old order overwrote its own 'done' row
+       * from that catch anyway.
+       */
       runLog.info('Run complete; trace persisted');
       await this.repo.saveRunTrace(runId, trace);
+      await this.repo.completeAgentRun(runId, {
+        status: 'done',
+        durationMs,
+        tokensIn,
+        tokensOut,
+        costUsd,
+        findingsCount: findingRows.length,
+        grounding,
+        score: outcome.review.score,
+        blockers,
+        error: null,
+      });
       this.container.runBus.complete(runId);
 
       return { review, findings: findingRows, grounding, raw: outcome.review };
@@ -350,6 +362,10 @@ export class ReviewRunExecutor {
       const status = cancelled ? 'cancelled' : 'failed';
       const msg = cancelled ? 'Cancelled by user' : (err as Error).message;
       runLog.error(cancelled ? 'Run cancelled by user' : `Run failed: ${msg}`);
+      // Trace BEFORE status — see the ordering note on the success path.
+      await this.repo
+        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start))
+        .catch(() => undefined);
       await this.repo
         .completeAgentRun(runId, {
           status,
@@ -361,9 +377,6 @@ export class ReviewRunExecutor {
           grounding: '0/0 passed',
           error: msg,
         })
-        .catch(() => undefined);
-      await this.repo
-        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start))
         .catch(() => undefined);
       this.container.runBus.complete(runId);
       throw err;
