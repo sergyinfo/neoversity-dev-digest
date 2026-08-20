@@ -67,7 +67,10 @@ export const Finding = z.object({
   start_line: z.number().int(),
   end_line: z.number().int(),
   explanation: z.string(), // markdown
-  suggestion: z.string(), // markdown
+  // nullish, matching the nullable `findings.suggestion` column: not every
+  // finding carries a fix. 9655f61 dropped the nullability while the column
+  // kept it, which forced the read boundary to invent `''` for a NULL row.
+  suggestion: z.string().nullish(), // markdown
   confidence: z.number().min(0).max(1),
   kind: FindingKind.nullish(),
   // Lethal-trifecta variant fields (present only when kind === 'lethal_trifecta')

@@ -54,7 +54,6 @@ const REVIEW_FIXTURE: Review = {
       start_line: 999,
       end_line: 999,
       explanation: 'This line does not exist in the diff.',
-      suggestion: 'n/a',
       confidence: 0.5,
       kind: 'finding',
     },
