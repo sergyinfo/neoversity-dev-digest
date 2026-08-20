@@ -2,6 +2,7 @@ import type { Container } from '../../platform/container.js';
 import type { Provider, Review, RunTrace, UnifiedDiff } from '@devdigest/shared';
 import { reviewPullRequest, countBlockers } from '@devdigest/reviewer-core';
 import { RunLogger } from '../../platform/run-logger.js';
+import { describePromptAssembly } from './prompt-log.js';
 import * as schema from '../../db/schema.js';
 import type { AgentRow } from '../../db/rows.js';
 import type { ReviewRepository, FindingRow, PullRow, ReviewRow } from './repository.js';
@@ -266,6 +267,35 @@ export class ReviewRunExecutor {
         },
       });
       const { tokensIn, tokensOut, costUsd, grounding } = outcome;
+
+      // ---- Observability: what went INTO the prompt --------------------------
+      // Shape only — section, source, size, model, run id. Never the text: the
+      // prompt carries the diff, the PR body and whatever a referenced spec
+      // says. `metric` mirrors to stdout only, so this stays out of the Live Log
+      // and out of the persisted trace. Best-effort by construction — an
+      // observability record must never cost a completed review.
+      try {
+        runLog.metric(
+          'prompt assembly',
+          describePromptAssembly({
+            assembly: outcome.assembly,
+            diffRaw: diff.raw,
+            diffFiles: diff.files.length,
+            runId,
+            prId: pull.id,
+            agent: agent.name,
+            provider: agent.provider,
+            model: agent.model,
+            mode: outcome.mode,
+            countTokens: (text) => this.container.tokenizer.count(text),
+            verbose: this.container.config.promptLogVerbose,
+          }),
+        );
+      } catch (err) {
+        runLog.metric('prompt assembly logging skipped', {
+          error: (err as Error).message,
+        });
+      }
 
       const keptFindings = outcome.review.findings;
 
