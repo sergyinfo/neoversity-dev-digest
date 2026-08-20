@@ -225,6 +225,32 @@ d('L03 Intent Layer (Testcontainers pg)', () => {
     expect(afterSecond).toBe(1);
   });
 
+  it('checks workspace ownership on the CACHE-HIT branch, not only when deriving', async () => {
+    const { app } = appWith();
+    const a = await app;
+    const { pr } = await setupPr(pg.handle.db, workspaceId);
+    const otherWorkspace = '00000000-0000-4000-8000-0000000000ff';
+
+    // Populate pr_intent as the legitimate owner, so the next call is a cache HIT.
+    const owned = await a.container.intent().getOrCompute(workspaceId, pr.id, {
+      headSha: pr.headSha,
+    });
+    expect(owned.intent).toBe(INTENT_FIXTURE.intent);
+
+    // `pr_intent` has no workspace_id of its own — it scopes transitively through
+    // pr_id. The cache-hit branch used to read it without ever calling getPull,
+    // so another tenant got the stored record back instead of a 404, and the
+    // guard effectively depended on whether a row happened to be cached.
+    await expect(
+      a.container.intent().getOrCompute(otherWorkspace, pr.id, { headSha: pr.headSha }),
+    ).rejects.toThrow(/not found/i);
+
+    // The miss path was already guarded (via `compute`); keep it that way.
+    await expect(
+      a.container.intent().getOrCompute(otherWorkspace, pr.id, { force: true }),
+    ).rejects.toThrow(/not found/i);
+  });
+
   it('skips derivation under NODE_ENV=test, so e2e flows stay LLM-free', async () => {
     const { app, llm } = appWith({ nodeEnv: 'test' });
     const a = await app;

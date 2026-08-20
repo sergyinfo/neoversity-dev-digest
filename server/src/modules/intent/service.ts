@@ -9,7 +9,7 @@ import { resolveFeatureModel } from '../../platform/feature-models.js';
 // free to drift — the silent empty-diff failure in server/INSIGHTS.md is exactly
 // what a drifted copy looks like.
 import { loadDiff } from '../reviews/diff-loader.js';
-import type { StoredIntent } from '../reviews/repository.js';
+import type { PullRow, StoredIntent } from '../reviews/repository.js';
 import { classifyIntent } from './classifier.js';
 import { parseReferences, resolveReferences } from './references.js';
 import { MAX_COMMIT_SUBJECTS } from './constants.js';
@@ -66,13 +66,21 @@ export class IntentService {
     prId: string,
     opts: { headSha?: string | null; force?: boolean } = {},
   ): Promise<PrIntentRecord> {
+    // Ownership is verified BEFORE the cache is read, not only on the miss path.
+    // `pr_intent` carries no workspace_id of its own — it scopes transitively via
+    // pr_id, like pr_files/pr_commits/pr_brief — so a cache HIT that skipped this
+    // would serve another tenant's intent while a MISS correctly 404'd through
+    // `compute`. That made the guard depend on whether a row happened to be cached.
+    const pull = await this.repo.getPull(workspaceId, prId);
+    if (!pull) throw new NotFoundError('Pull request not found');
+
     const stored = opts.force ? undefined : await this.repo.getIntent(prId);
     const currentHead = opts.headSha ?? undefined;
     const isFresh =
       stored !== undefined &&
       (currentHead === undefined || stored.headSha === null || stored.headSha === currentHead);
     if (stored && isFresh) return toRecord(prId, stored);
-    return this.compute(workspaceId, prId, currentHead);
+    return this.computeFor(workspaceId, pull, currentHead);
   }
 
   /** Always calls the model. Used by the explicit recompute route. */
@@ -81,9 +89,24 @@ export class IntentService {
     prId: string,
     headSha?: string | null,
   ): Promise<PrIntentRecord> {
-    const log = this.log;
     const pull = await this.repo.getPull(workspaceId, prId);
     if (!pull) throw new NotFoundError('Pull request not found');
+    return this.computeFor(workspaceId, pull, headSha);
+  }
+
+  /**
+   * The derivation itself. Takes an ALREADY-SCOPED `PullRow` rather than a bare
+   * prId, so the tenancy check cannot be skipped by a future caller: the only way
+   * to obtain one is `getPull(workspaceId, …)`. Both public entry points do that
+   * lookup exactly once and hand the row down.
+   */
+  private async computeFor(
+    workspaceId: string,
+    pull: PullRow,
+    headSha?: string | null,
+  ): Promise<PrIntentRecord> {
+    const log = this.log;
+    const prId = pull.id;
     const repoRow = await this.repo.getRepo(pull.repoId);
     if (!repoRow) throw new NotFoundError('Repo not found');
     const repoRef = { owner: repoRow.owner, name: repoRow.name };
