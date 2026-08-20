@@ -72,7 +72,7 @@ export function useDeleteRun(prId: string | null | undefined) {
     // both the timeline and the Review Runs list from cache.
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pr-runs", prId] });
-      qc.invalidateQueries({ queryKey: ["reviews", prId] });
+      invalidatePrReviewData(qc, prId);
     },
   });
 }
@@ -84,12 +84,35 @@ export function useCancelRun() {
   });
 }
 
+/**
+ * Invalidate everything derived from a PR's reviews.
+ *
+ * Smart Diff is computed from the LATEST review's findings, so anything that
+ * changes reviews changes its badges too. Listing the dependent keys here once —
+ * rather than remembering to add a line at each of the five call sites — is what
+ * keeps a new derived view from silently going stale the day it is added.
+ */
+function invalidatePrReviewData(qc: ReturnType<typeof useQueryClient>, prId: string | null | undefined) {
+  qc.invalidateQueries({ queryKey: ["reviews", prId] });
+  qc.invalidateQueries({ queryKey: ["smart-diff", prId] });
+}
+
+/**
+ * The same invalidation, for callers outside this file — notably the PR page,
+ * which refreshes review-derived data when a run finishes. Exposed as a hook so
+ * that list of dependent keys has exactly one home.
+ */
+export function useInvalidatePrReviewData(prId: string | null | undefined) {
+  const qc = useQueryClient();
+  return () => invalidatePrReviewData(qc, prId);
+}
+
 /** Delete a whole review run (one agent's pass) + its findings. */
 export function useDeleteReview(prId: string | null | undefined) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (reviewId: string) => api.del<{ ok: boolean }>(`/reviews/${reviewId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["reviews", prId] }),
+    onSuccess: () => invalidatePrReviewData(qc, prId),
   });
 }
 
@@ -137,7 +160,7 @@ export function useRunReview() {
         ...(all ? { all } : {}),
       }),
     onSuccess: (_d, { prId }) => {
-      qc.invalidateQueries({ queryKey: ["reviews", prId] });
+      invalidatePrReviewData(qc, prId);
     },
   });
 }
@@ -162,7 +185,7 @@ export function useFindingAction() {
         reply ? { reply } : undefined,
       ),
     onSuccess: (_d, { prId }) => {
-      if (prId) qc.invalidateQueries({ queryKey: ["reviews", prId] });
+      if (prId) invalidatePrReviewData(qc, prId);
     },
   });
 }

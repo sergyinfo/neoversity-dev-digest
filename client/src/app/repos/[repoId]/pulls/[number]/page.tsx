@@ -17,7 +17,14 @@ import { DiffTab } from "./_components/DiffTab";
 import RunTraceDrawer from "./_components/RunTraceDrawer";
 import { usePullDetail, usePulls } from "../../../../../lib/hooks";
 import { useQueryClient } from "@tanstack/react-query";
-import { usePrReviews, useCancelRun, usePrActiveRuns, usePrRuns, useDeleteRun } from "../../../../../lib/hooks/reviews";
+import {
+  usePrReviews,
+  useCancelRun,
+  usePrActiveRuns,
+  usePrRuns,
+  useDeleteRun,
+  useInvalidatePrReviewData,
+} from "../../../../../lib/hooks/reviews";
 import { useActiveRepo, useRepoNotFound } from "../../../../../lib/repo-context";
 import { ApiError } from "../../../../../lib/api";
 import { githubPrUrl } from "../../../../../lib/github-urls";
@@ -37,7 +44,7 @@ export default function PRDetailPage() {
   const { data: pr, isLoading: detailLoading, isError, error, refetch } = usePullDetail(prId);
 
   const isLoading = pullsLoading || (prId != null && detailLoading);
-  const { data: reviews, refetch: refetchReviews } = usePrReviews(prId);
+  const { data: reviews } = usePrReviews(prId);
 
   // Live run tracking is SERVER-SOURCED (agent_runs status='running'): survives
   // navigation AND reload, and self-clears via polling when runs finish.
@@ -48,6 +55,7 @@ export default function PRDetailPage() {
   const liveRunIds = (activeRuns ?? []).map((r) => r.run_id);
   const reviewRunning = liveRunIds.length > 0;
   const cancel = useCancelRun();
+  const invalidateReviewData = useInvalidatePrReviewData(prId);
   const invalidateActiveRuns = () => {
     if (prId) qc.invalidateQueries({ queryKey: ["pr-active-runs", prId] });
   };
@@ -165,7 +173,9 @@ export default function PRDetailPage() {
             onRunDone={() => {
               invalidateActiveRuns();
               invalidateRunHistory();
-              refetchReviews();
+              // Refreshes the findings AND everything derived from them — the
+              // Smart Diff badges appear here without a reload.
+              invalidateReviewData();
             }}
           />
         )}

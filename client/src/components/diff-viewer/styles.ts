@@ -64,6 +64,35 @@ export const s = {
     color: "var(--text-primary)",
     paddingRight: 12,
   } satisfies CSSProperties,
+  /**
+   * A line the latest review flagged. A left border rather than a background
+   * tint: the add/del tint already owns the row background, and stacking a
+   * second one makes an added-and-flagged line unreadable.
+   */
+  findingLine: {
+    borderLeft: "2px solid var(--sev-warning, #d29922)",
+    marginLeft: -2,
+  } satisfies CSSProperties,
+  /** The same line just after a badge jump — briefly lit so the eye lands on it. */
+  findingLineFlash: {
+    borderLeft: "2px solid var(--sev-warning, #d29922)",
+    marginLeft: -2,
+    background: "var(--code-highlight, rgba(210,153,34,.14))",
+    transition: "background .3s",
+  } satisfies CSSProperties,
+  /** Clickable "N findings" chip in a file header. */
+  findingBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 11,
+    padding: "2px 7px",
+    borderRadius: 999,
+    cursor: "pointer",
+    color: "var(--sev-warning, #d29922)",
+    background: "color-mix(in srgb, var(--sev-warning, #d29922) 14%, transparent)",
+    border: "1px solid color-mix(in srgb, var(--sev-warning, #d29922) 35%, transparent)",
+  } satisfies CSSProperties,
 } as const;
 
 /** Chevron rotates 90deg when the file card is open. */
