@@ -9,7 +9,6 @@ import type {
   SeverityCounts,
 } from '@devdigest/shared';
 import { PrCommentInput } from '@devdigest/shared';
-import { IntentService } from '../intent/service.js';
 import * as t from '../../db/schema.js';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
@@ -349,7 +348,7 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
     async function deriveIntentForDetail(prId: string, headSha: string | null) {
       if (container.config.nodeEnv === 'test') return null;
       try {
-        return await new IntentService(container, req.log).getOrCompute(workspaceId, prId, {
+        return await container.intent(req.log).getOrCompute(workspaceId, prId, {
           headSha,
         });
       } catch (err) {
