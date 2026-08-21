@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { Provider } from './knowledge.js';
 import { SeverityCounts } from './findings.js';
+// One-way: review-api imports findings + brief only, never platform.
+import { PrIntentRecord } from './review-api.js';
 
 /**
  * Platform / scaffolding DTOs owned by F1:
@@ -52,9 +54,11 @@ export const FEATURE_MODELS: FeatureModelDef[] = [
   {
     id: 'review_intent',
     label: 'PR Review · Intent',
-    description: 'Derives a PR’s intent and scope before review.',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-4.1',
+    // Deliberately the cheap tier: the classifier reads headers and prose, not
+    // change bodies, and its output is non-binding context for the reviewer.
+    description: 'Derives a PR’s intent and scope before review. Cheap model — headers only.',
+    defaultProvider: 'openrouter',
+    defaultModel: 'deepseek/deepseek-v4-flash',
   },
   {
     id: 'risk_brief',
@@ -212,6 +216,10 @@ export const PrDetail = PrMeta.extend({
   files: z.array(PrFile),
   commits: z.array(PrCommit),
   linked_issue: IssueMeta.nullish(),
+  // Derived PR intent (Intent Layer). Null when not derived yet, when the
+  // classifier failed, or when intent derivation is skipped (test runs) — the
+  // UI renders those three states differently, so absence must stay visible.
+  intent: PrIntentRecord.nullish(),
 });
 export type PrDetail = z.infer<typeof PrDetail>;
 

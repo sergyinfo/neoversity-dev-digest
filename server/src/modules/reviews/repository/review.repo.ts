@@ -43,8 +43,9 @@ export async function insertFindings(
         severity: f.severity,
         category: f.category,
         title: f.title,
-        rationale: f.rationale,
-        suggestion: f.suggestion ?? null,
+        // Contract field `explanation` → DB column `rationale` (see helpers.ts).
+        rationale: f.explanation,
+        suggestion: f.suggestion,
         confidence: f.confidence,
         kind: f.kind ?? 'finding',
         trifectaComponents: f.trifecta_components ?? null,

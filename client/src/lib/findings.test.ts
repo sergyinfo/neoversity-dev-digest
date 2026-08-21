@@ -16,7 +16,7 @@ function finding(o: Partial<FindingRecord> & { id: string }): FindingRecord {
     severity: "WARNING",
     category: "bug",
     title: "Something",
-    rationale: "Because",
+    explanation: "Because",
     suggestion: null,
     confidence: 0.9,
     kind: "finding",

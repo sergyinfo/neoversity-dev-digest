@@ -77,7 +77,7 @@ export function FindingCard({
       {expanded && (
         <div style={s.body}>
           <div style={s.prose}>
-            <Markdown>{f.rationale}</Markdown>
+            <Markdown>{f.explanation}</Markdown>
           </div>
           {f.suggestion && (
             <div style={s.suggestionWrap}>

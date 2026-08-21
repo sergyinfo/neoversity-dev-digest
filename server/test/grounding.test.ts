@@ -29,7 +29,8 @@ function f(partial: Partial<Finding>): Finding {
     file: 'src/config.ts',
     start_line: 12,
     end_line: 12,
-    rationale: 'r',
+    explanation: 'r',
+    suggestion: 's',
     confidence: 0.8,
     ...partial,
   };

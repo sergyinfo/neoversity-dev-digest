@@ -21,6 +21,10 @@ export type ReviewRow = typeof t.reviews.$inferSelect;
 import * as reviewRepo from './repository/review.repo.js';
 import * as runRepo from './repository/run.repo.js';
 import * as pullRepo from './repository/pull.repo.js';
+
+/** A persisted intent plus the provenance of its derivation. */
+export type StoredIntent = Intent & pullRepo.IntentProvenance & { derivedAt: Date };
+
 import * as skillRepo from './repository/skill.repo.js';
 
 export class ReviewRepository {
@@ -38,6 +42,10 @@ export class ReviewRepository {
 
   getPrFiles(prId: string): Promise<(typeof t.prFiles.$inferSelect)[]> {
     return pullRepo.getPrFiles(this.db, prId);
+  }
+
+  getPrCommits(prId: string): Promise<(typeof t.prCommits.$inferSelect)[]> {
+    return pullRepo.getPrCommits(this.db, prId);
   }
 
   // ---- skills linked to an agent ------------------------------------------
@@ -135,11 +143,15 @@ export class ReviewRepository {
 
   // ---- intent -------------------------------------------------------------
 
-  upsertIntent(prId: string, intent: Intent): Promise<void> {
-    return pullRepo.upsertIntent(this.db, prId, intent);
+  upsertIntent(
+    prId: string,
+    intent: Intent,
+    provenance?: pullRepo.IntentProvenance,
+  ): Promise<void> {
+    return pullRepo.upsertIntent(this.db, prId, intent, provenance);
   }
 
-  getIntent(prId: string): Promise<Intent | undefined> {
+  getIntent(prId: string): Promise<StoredIntent | undefined> {
     return pullRepo.getIntent(this.db, prId);
   }
 

@@ -66,6 +66,18 @@ export interface PromptParts {
    * undefined → section omitted.
    */
   prDescription?: string;
+  /**
+   * The PR's DERIVED intent block (Intent Layer): what the PR claims to be for,
+   * plus which areas the author treats as focal vs peripheral.
+   *
+   * Untrusted, and doubly so: it is produced by a model reading author-controlled
+   * text, so it inherits every injection vector `prDescription` has. Rendered
+   * last before the diff, delimiter-wrapped. It is context for PRIORITIZATION
+   * only — INJECTION_GUARD already names "derived intent/scope" as data that can
+   * never turn a real defect into zero findings. Empty/undefined → section
+   * omitted (byte-identical prompt to before the Intent Layer existed).
+   */
+  intent?: string;
   /** The unified diff / user task (untrusted content). */
   diff: string;
   /** Optional task framing line, e.g. "Review PR #482 '…'". */
@@ -101,6 +113,12 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
       ? parts.prDescription.slice(0, MAX_PR_DESCRIPTION_CHARS)
       : undefined;
 
+  // ONE guard, used for both the rendered section and the trace slot below. When
+  // the two were separate (`trim().length > 0` here, a bare `?? null` there) a
+  // whitespace-only intent was recorded in the trace as an intent the prompt had
+  // never actually carried.
+  const intent = parts.intent && parts.intent.trim().length > 0 ? parts.intent : undefined;
+
   const userSections: string[] = [];
   if (parts.task) userSections.push(parts.task);
   if (prDescription) {
@@ -116,6 +134,9 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
     userSections.push(
       `## Callers of changed symbols\n${wrapUntrusted('callers', parts.callers)}`,
     );
+  }
+  if (intent) {
+    userSections.push(`## PR intent\n${wrapUntrusted('pr-intent', intent)}`);
   }
   userSections.push(`## Diff to review\n${wrapUntrusted('diff', parts.diff)}`);
 
@@ -134,6 +155,11 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
     callers: parts.callers ?? null,
     repo_map: parts.repoMap ?? null,
     pr_description: prDescription ?? null,
+    // Omitted rather than null when there is no intent, so a run without one
+    // yields a trace document byte-identical to a pre-Intent-Layer run. The
+    // contract slot is `nullish()`, and run-executor's partial assembly for
+    // failed runs already leaves this key out entirely.
+    ...(intent ? { intent } : {}),
     user,
   };
 

@@ -26,6 +26,19 @@ const EnvSchema = z.object({
   // Note: even when on, sections only populate once the repo is indexed; an
   // unindexed repo degrades gracefully. Per-agent override: agents.repo_intel.
   REPO_INTEL_ENABLED: z.string().optional(),
+  // Intent Layer: follow external http(s) links found in a PR description to
+  // pull in a referenced plan/spec. Default OFF — the URL comes from
+  // author-controlled text, so enabling it turns the API into an SSRF proxy on
+  // someone else's input. Repo-file and GitHub-issue references do NOT need
+  // this flag; they never leave the clone or the already-authenticated API.
+  INTENT_EXTERNAL_FETCH_ENABLED: z.string().optional(),
+  // Verbose prompt-assembly logging (per-section digests + untrusted-block
+  // counts, on top of the section/source/size/model record that is always
+  // written at debug level). LOCAL ONLY: forced off when NODE_ENV=production,
+  // because the extra granularity is a debugging aid for the machine that owns
+  // the repo, not something to accumulate in a deployed log sink. It never
+  // enables logging prompt CONTENT — see modules/reviews/prompt-log.ts.
+  PROMPT_LOG_VERBOSE: z.string().optional(),
   API_PORT: z.coerce.number().int().default(3001),
   WEB_PORT: z.coerce.number().int().default(3000),
   DEVDIGEST_CLONE_DIR: z.string().optional(),
@@ -59,6 +72,20 @@ export type AppConfig = {
    * EXACTLY like the ripgrep-only baseline.
    */
   repoIntelEnabled: boolean;
+  /**
+   * Whether the Intent Layer may fetch EXTERNAL http(s) references found in a
+   * PR description. Default false. Off ⇒ `container.webFetch` throws
+   * ConfigError, and the reference resolver skips url-kind references.
+   */
+  intentExternalFetchEnabled: boolean;
+  /**
+   * Whether prompt-assembly logging emits its verbose METADATA (per-section
+   * SHA-256 prefixes and untrusted-block counts). Default false, and forced
+   * false when `nodeEnv === 'production'` — `PROMPT_LOG_VERBOSE=true` cannot
+   * turn it on there. Never gates content: no setting makes the server log the
+   * prompt, the diff, or spec bodies.
+   */
+  promptLogVerbose: boolean;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -77,5 +104,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webOrigin: `http://localhost:${parsed.WEB_PORT}`,
     embeddingsEnabled: parsed.EMBEDDINGS_ENABLED === 'true',
     repoIntelEnabled: parsed.REPO_INTEL_ENABLED !== 'false',
+    intentExternalFetchEnabled: parsed.INTENT_EXTERNAL_FETCH_ENABLED === 'true',
+    // The `!== 'production'` half is the local-only guarantee, and it is
+    // deliberately enforced HERE rather than at the call site: a future caller
+    // reading `config.promptLogVerbose` cannot forget it.
+    promptLogVerbose:
+      parsed.PROMPT_LOG_VERBOSE === 'true' && parsed.NODE_ENV !== 'production',
   };
 }

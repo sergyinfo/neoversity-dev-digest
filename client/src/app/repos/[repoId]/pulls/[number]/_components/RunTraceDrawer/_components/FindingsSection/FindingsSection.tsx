@@ -48,7 +48,7 @@ export function FindingsSection({ findings }: { findings: FindingRecord[] }) {
                 {f.end_line !== f.start_line ? `-${f.end_line}` : ""}
               </div>
               <div style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                {f.rationale}
+                {f.explanation}
               </div>
               {f.suggestion && (
                 <div style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5, marginTop: 6 }}>

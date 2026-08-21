@@ -6,6 +6,7 @@ import type {
   CodeIndex,
   Embedder,
   LLMProvider,
+  WebFetchClient,
 } from '@devdigest/shared';
 import type { AppConfig } from './config.js';
 import type { Db } from '../db/client.js';
@@ -29,6 +30,8 @@ import type { RepoIntel } from '../modules/repo-intel/types.js';
 import { RepoIntelService } from '../modules/repo-intel/service.js';
 import { type DepGraph, DepCruiseGraph } from '../adapters/depgraph/index.js';
 import { type Tokenizer, TiktokenTokenizer } from '../adapters/tokenizer/index.js';
+import { HttpWebFetchClient } from '../adapters/http/web-fetch.js';
+import { IntentService, type Logger as IntentLogger } from '../modules/intent/service.js';
 
 /**
  * DI container. One per app instance. Holds config, db, the JobRunner,
@@ -51,6 +54,8 @@ export interface ContainerOverrides {
   /** repo-intel T3 adapters — only the indexer pipeline reads these. */
   depgraph?: DepGraph;
   tokenizer?: Tokenizer;
+  /** Guarded outbound HTTP (Intent Layer external references). */
+  webFetch?: WebFetchClient;
 }
 
 export class Container {
@@ -75,6 +80,7 @@ export class Container {
   private _repoIntel?: RepoIntel;
   private _depgraph?: DepGraph;
   private _tokenizer?: Tokenizer;
+  private _webFetch?: WebFetchClient;
   private _priceBook?: PriceBook;
 
   constructor(config: AppConfig, db: Db, private overrides: ContainerOverrides = {}) {
@@ -129,6 +135,38 @@ export class Container {
     if (this.overrides.tokenizer) return this.overrides.tokenizer;
     this._tokenizer ??= new TiktokenTokenizer();
     return this._tokenizer;
+  }
+
+  /**
+   * Guarded outbound HTTP, for following a plan/spec link out of a PR body.
+   *
+   * Gated HERE rather than at the call site (same shape as `embedder()`): the
+   * flag decision lives with the capability, so no consumer can forget it. When
+   * off this throws before a client is ever constructed, and callers treat the
+   * throw as "skip external references" — reference resolution is best-effort.
+   */
+  get webFetch(): WebFetchClient {
+    if (this.overrides.webFetch) return this.overrides.webFetch;
+    if (!this.config.intentExternalFetchEnabled) {
+      throw new ConfigError(
+        'External reference fetching is disabled. Set INTENT_EXTERNAL_FETCH_ENABLED=true to allow the Intent Layer to follow http(s) links found in PR descriptions.',
+      );
+    }
+    this._webFetch ??= new HttpWebFetchClient();
+    return this._webFetch;
+  }
+
+  /**
+   * Intent Layer service (L03), so consuming modules reach it the same way they
+   * reach `repoIntel` instead of importing another module's service class.
+   *
+   * A METHOD rather than a cached getter: `IntentService` takes the per-request
+   * logger, and the container is per-app, so caching one instance would pin the
+   * first request's logger onto every later request. Construction is cheap — the
+   * instance holds nothing but the container and that logger.
+   */
+  intent(logger?: IntentLogger): IntentService {
+    return new IntentService(this, logger);
   }
 
   /**

@@ -51,7 +51,7 @@ function finding(o: Partial<FindingRecord> & { id: string }): FindingRecord {
     severity: "CRITICAL",
     category: "security",
     title: "Hardcoded secret committed",
-    rationale: "A literal key is committed.",
+    explanation: "A literal key is committed.",
     suggestion: null,
     confidence: 0.97,
     kind: "finding",

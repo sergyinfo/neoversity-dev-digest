@@ -87,6 +87,19 @@ export interface LLMProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
 
+// ---------- Outbound HTTP (guarded) ----------
+/**
+ * Fetch a text document from an external URL, for features that follow links
+ * out of user-supplied text (e.g. a plan/spec referenced in a PR description).
+ *
+ * Implementations MUST be SSRF-hardened — the URL originates from untrusted
+ * text — and MUST enforce a timeout, a size cap and a text-only content type.
+ * Server-only port; the web client never imports it.
+ */
+export interface WebFetchClient {
+  fetch(url: string): Promise<string>;
+}
+
 // ---------- Embedder ----------
 export interface Embedder {
   /** OpenAI text-embedding-3-small → 1536 dims. */

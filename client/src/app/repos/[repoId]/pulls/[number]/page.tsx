@@ -17,7 +17,14 @@ import { DiffTab } from "./_components/DiffTab";
 import RunTraceDrawer from "./_components/RunTraceDrawer";
 import { usePullDetail, usePulls } from "../../../../../lib/hooks";
 import { useQueryClient } from "@tanstack/react-query";
-import { usePrReviews, useCancelRun, usePrActiveRuns, usePrRuns, useDeleteRun } from "../../../../../lib/hooks/reviews";
+import {
+  usePrReviews,
+  useCancelRun,
+  usePrActiveRuns,
+  usePrRuns,
+  useDeleteRun,
+  useInvalidatePrReviewData,
+} from "../../../../../lib/hooks/reviews";
 import { useActiveRepo, useRepoNotFound } from "../../../../../lib/repo-context";
 import { ApiError } from "../../../../../lib/api";
 import { githubPrUrl } from "../../../../../lib/github-urls";
@@ -37,7 +44,7 @@ export default function PRDetailPage() {
   const { data: pr, isLoading: detailLoading, isError, error, refetch } = usePullDetail(prId);
 
   const isLoading = pullsLoading || (prId != null && detailLoading);
-  const { data: reviews, refetch: refetchReviews } = usePrReviews(prId);
+  const { data: reviews } = usePrReviews(prId);
 
   // Live run tracking is SERVER-SOURCED (agent_runs status='running'): survives
   // navigation AND reload, and self-clears via polling when runs finish.
@@ -48,6 +55,7 @@ export default function PRDetailPage() {
   const liveRunIds = (activeRuns ?? []).map((r) => r.run_id);
   const reviewRunning = liveRunIds.length > 0;
   const cancel = useCancelRun();
+  const invalidateReviewData = useInvalidatePrReviewData(prId);
   const invalidateActiveRuns = () => {
     if (prId) qc.invalidateQueries({ queryKey: ["pr-active-runs", prId] });
   };
@@ -75,6 +83,51 @@ export default function PRDetailPage() {
   );
   const lethalTrifecta = allFindings.filter((f) => f.kind === "lethal_trifecta");
   const findingsCount = allFindings.length;
+
+  /**
+   * Smart Diff → Findings. Resolves a flagged (path, line) back to the finding
+   * it came from and opens the Findings tab on it.
+   *
+   * Only the LATEST run is searched, because that is the run Smart Diff's
+   * `finding_lines` came from; scanning every run could land on a finding from
+   * a superseded review that no longer matches what the badge counted.
+   *
+   * `push`, not `replace`: this is a navigation the reader chose, so Back should
+   * return them to the diff they were reading. Both params move in one call so
+   * it costs one history entry, not two.
+   */
+  const openFindingFromDiff = (path: string, line: number) => {
+    const latest = runs[0]?.findings ?? [];
+    const hit =
+      latest.find((f) => f.file === path && f.start_line === line) ??
+      latest.find((f) => f.file === path);
+    const sp = new URLSearchParams(search.toString());
+    sp.set("tab", "findings");
+    if (hit) sp.set("finding", hit.id);
+    else sp.delete("finding");
+    router.push(`/repos/${repoId}/pulls/${number}?${sp.toString()}`);
+  };
+
+  // Scroll the targeted finding into view once the Findings tab has rendered it.
+  // `FindingCard` already carries a `data-finding-id` anchor, so this needs no
+  // prop drilling through FindingsTab → ReviewRunAccordion → FindingsPanel.
+  // It retries briefly because the card mounts a frame or two after the param
+  // changes, and its run's accordion may still be opening.
+  const focusFindingId = search.get("finding");
+  React.useEffect(() => {
+    if (!focusFindingId || tab !== "findings") return;
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      const el = document.querySelector(`[data-finding-id="${focusFindingId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        window.clearInterval(timer);
+      } else if (++tries > 20) {
+        window.clearInterval(timer);
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [focusFindingId, tab, findingsCount]);
 
   const repoName = activeRepo?.full_name ?? repoId;
   // The real "owner/repo" (null until the repo is loaded) — used to build
@@ -134,7 +187,16 @@ export default function PRDetailPage() {
       />
 
       <div style={{ padding: "24px 32px 44px", display: "flex", flexDirection: "column", gap: 24, maxWidth: 1080, margin: "0 auto" }}>
-        {tab === "overview" && <OverviewTab prBody={pr.body} />}
+        {tab === "overview" && (
+          <OverviewTab
+            prId={prId}
+            prBody={pr.body}
+            intent={pr.intent}
+            // The detail payload carries the intent, so a refetch (e.g. after a
+            // recompute) shows the skeleton rather than the previous intent.
+            intentLoading={detailLoading}
+          />
+        )}
 
         {tab === "findings" && (
           <FindingsTab
@@ -156,7 +218,9 @@ export default function PRDetailPage() {
             onRunDone={() => {
               invalidateActiveRuns();
               invalidateRunHistory();
-              refetchReviews();
+              // Refreshes the findings AND everything derived from them — the
+              // Smart Diff badges appear here without a reload.
+              invalidateReviewData();
             }}
           />
         )}
@@ -166,6 +230,7 @@ export default function PRDetailPage() {
             prId={prId}
             filesCount={pr.files_count}
             files={pr.files}
+            onOpenFinding={openFindingFromDiff}
             canComment={pr.status === "open"}
           />
         )}

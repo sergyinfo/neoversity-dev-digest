@@ -52,6 +52,23 @@ export class RunLogger {
     this.base?.[LEVEL[kind]]({ ...this.ctx, runIds: this.runIds, kind, ...(data !== undefined ? { data } : {}) }, msg);
   }
 
+  /**
+   * Ops-only structured record: mirrored to stdout (pino) and deliberately NOT
+   * published to the run bus.
+   *
+   * Use for observability payloads that belong in server logs but would be noise
+   * in the user-facing Live Log. Because it never reaches `bus.publish`, it also
+   * never reaches `logFor()` and therefore never lands in the persisted
+   * `run_traces.log` document — which is what keeps this channel safe for
+   * anything the trace should not carry.
+   *
+   * The run's correlation context (`runIds`, plus whatever `forRun`/the
+   * constructor put in `ctx`, e.g. prId and agent) is merged in automatically.
+   */
+  metric(msg: string, data: Record<string, unknown>, level: 'info' | 'debug' = 'debug'): void {
+    this.base?.[level]({ ...this.ctx, runIds: this.runIds, ...data }, msg);
+  }
+
   info(msg: string, data?: unknown): void {
     this.event('info', msg, data);
   }

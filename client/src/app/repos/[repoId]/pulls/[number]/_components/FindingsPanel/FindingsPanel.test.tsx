@@ -19,7 +19,7 @@ function finding(over: Partial<FindingRecord> & { id: string; title: string }): 
     file: "src/config.ts",
     start_line: 11,
     end_line: 11,
-    rationale: "A secret is committed.",
+    explanation: "A secret is committed.",
     suggestion: null,
     confidence: 0.95,
     kind: "finding",

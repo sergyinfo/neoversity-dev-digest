@@ -14,6 +14,7 @@ import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { AppError, NotFoundError } from '../../platform/errors.js';
 import { deriveReviewStatus } from './status.js';
+import { RunLogger } from '../../platform/run-logger.js';
 
 /**
  * F1 — pulls module. PR import via Octokit (list + per-PR detail).
@@ -295,7 +296,12 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
         })
         .where(eq(t.pullRequests.id, pr.id));
 
-      return { ...detail, id: pr.id };
+      // Intent rides along on the detail payload. `detail.head_sha` — not
+      // `pr.headSha` — is the freshly fetched head, and the update above
+      // deliberately does NOT write it back, so comparing against the stored
+      // column here would mean the intent cache never invalidates.
+      const intent = await deriveIntentForDetail(pr.id, detail.head_sha);
+      return { ...detail, id: pr.id, intent };
     } catch (err) {
       app.log.warn({ err }, 'GitHub PR detail refresh skipped (no token / offline); serving persisted detail');
       const files = await container.db.select().from(t.prFiles).where(eq(t.prFiles.prId, pr.id));
@@ -327,7 +333,52 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
           author: c.author,
           committed_at: c.committedAt?.toISOString() ?? null,
         })),
+        intent: await deriveIntentForDetail(pr.id, pr.headSha),
       };
+    }
+
+    /**
+     * Lazily derive the PR's intent, and never let that break opening a PR.
+     *
+     * Skipped under NODE_ENV=test: this endpoint is on the deterministic e2e
+     * path (`e2e/specs/02-repo-pulls-detail.flow.json` opens a PR and waits for
+     * networkidle), and e2e/CLAUDE.md requires those flows to call no LLM. On a
+     * machine with a key configured an unguarded call would both spend money and
+     * risk stalling past networkidle.
+     */
+    async function deriveIntentForDetail(prId: string, headSha: string | null) {
+      if (container.config.nodeEnv === 'test') return null;
+
+      // Staged under the PR id, not a run id: this happens when the PR is
+      // OPENED, and no run exists yet. `run-executor` drains it into the Live
+      // Log of the next review, so a reader watching a run still sees when the
+      // intent it is using was produced. Nothing subscribes to this key.
+      const prLog = new RunLogger(container.runBus, [prId], req.log, { prId });
+      const startedAt = Date.now();
+      try {
+        const record = await prLog.step(
+          'Deriving PR intent',
+          () => container.intent(req.log).getOrCompute(workspaceId, prId, { headSha }),
+          { kind: 'tool' },
+        );
+
+        // `getOrCompute` is silent about which branch it took, and the honest
+        // line differs: a cache hit must not be reported as a derivation. The
+        // stored row's own timestamp settles it — one written before this call
+        // started cannot have come from it.
+        const derivedNow =
+          record.derived_at != null && new Date(record.derived_at).getTime() >= startedAt;
+        prLog.info(
+          derivedNow
+            ? `PR intent derived with ${record.model ?? 'the configured model'} (confidence: ${record.confidence})`
+            : 'PR intent served from cache — head unchanged, no model call',
+        );
+        return record;
+      } catch (err) {
+        prLog.error(`Could not derive PR intent: ${(err as Error).message} — serving without it`);
+        req.log.warn({ err, prId }, 'intent derivation skipped; serving PR detail without it');
+        return null;
+      }
     }
   });
 

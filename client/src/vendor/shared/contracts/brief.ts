@@ -6,10 +6,37 @@ import { z } from 'zod';
  */
 
 // ---- Intent ----
+/**
+ * How much to trust a derived intent. A three-level BAND, not a percentage:
+ * the classifier is deliberately the cheap model tier, and cheap models are
+ * systematically overconfident when asked for a number — a band is something a
+ * JSON schema can actually constrain, and `73%` would be invented precision.
+ */
+export const IntentConfidence = z.enum(['high', 'medium', 'low']);
+export type IntentConfidence = z.infer<typeof IntentConfidence>;
+
+/**
+ * Which signals the intent was actually derived from, strongest first. The
+ * server maps these to an evidence tier and caps the model's self-reported
+ * band by it, so a PR with no prose can never be reported as high-confidence.
+ */
+export const IntentSource = z.enum([
+  'spec',
+  'linked_issue',
+  'pr_description',
+  'commits',
+  'branch',
+  'file_paths',
+]);
+export type IntentSource = z.infer<typeof IntentSource>;
+
 export const Intent = z.object({
   intent: z.string(),
   in_scope: z.array(z.string()),
   out_of_scope: z.array(z.string()),
+  /** Nullish so intents persisted before the Intent Layer still parse. */
+  confidence: IntentConfidence.nullish(),
+  sources: z.array(IntentSource).nullish(),
 });
 export type Intent = z.infer<typeof Intent>;
 

@@ -2,12 +2,16 @@ import type { Container } from '../../platform/container.js';
 import type { Provider, Review, RunTrace, UnifiedDiff } from '@devdigest/shared';
 import { reviewPullRequest, countBlockers } from '@devdigest/reviewer-core';
 import { RunLogger } from '../../platform/run-logger.js';
+import { describePromptAssembly } from './prompt-log.js';
 import * as schema from '../../db/schema.js';
 import type { AgentRow } from '../../db/rows.js';
 import type { ReviewRepository, FindingRow, PullRow, ReviewRow } from './repository.js';
 import { REVIEW_STRATEGY } from './constants.js';
 import { taskLine } from './helpers.js';
 import { loadDiff } from './diff-loader.js';
+// Leaf module (contract types only) — importing it does not create a cycle with
+// intent/service.ts, which depends on this module's diff-loader.
+import { renderIntentBlock } from '../intent/block.js';
 
 /** Thrown by a run when the user cancels it mid-flight (between map files). */
 export class RunCancelledError extends Error {
@@ -69,11 +73,30 @@ export class ReviewRunExecutor {
       { prId: pull.id },
     );
 
+    // Intent is derived when the PR is OPENED, not when it is reviewed — so by
+    // the time a run starts, the interesting part already happened and nobody
+    // watching the Live Log saw it. Those steps were staged under the PR id
+    // (see modules/pulls/routes.ts); replay them here as the first thing in the
+    // run, carrying their ORIGINAL clock time so the log does not imply the
+    // derivation happened just now.
+    //
+    // Draining rather than reading keeps the staging buffer bounded and stops a
+    // second run from replaying the same history twice.
+    const staged = this.container.runBus.drain(pull.id);
+    if (staged.length > 0) {
+      runLog.info(`PR intent was prepared when this PR was opened — replaying ${staged.length} step(s):`);
+      for (const e of staged) runLog.event(e.kind, `[${e.t}] ${e.msg}`);
+    }
+
     // Pre-work failure (e.g. diff load) fails EVERY queued run. The error was
     // already emitted via runLog (fanned out → in each run's buffer); here we
     // mark the rows failed and persist the buffered log so it survives a reload.
     const failAll = async (msg: string) => {
       for (const { runId, agent } of jobs) {
+        // Trace BEFORE status — see the ordering note on the success path.
+        await this.repo
+          .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed'))
+          .catch(() => undefined);
         await this.repo
           .completeAgentRun(runId, {
             status: 'failed',
@@ -85,9 +108,6 @@ export class ReviewRunExecutor {
             grounding: '0/0 passed',
             error: msg,
           })
-          .catch(() => undefined);
-        await this.repo
-          .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed'))
           .catch(() => undefined);
         this.container.runBus.complete(runId);
       }
@@ -105,6 +125,39 @@ export class ReviewRunExecutor {
     }
     runLog.info(`Diff ready — ${diff.files.length} changed file(s); starting ${jobs.length} agent run(s)`);
 
+    // Read the stored intent ONCE per PR, not per agent — every agent reviews the
+    // same PR, so re-reading it per run would buy nothing.
+    //
+    // Deliberately a READ, never a derivation: intent is derived when the PR is
+    // imported (GET /pulls/:id), so a review never pays for a model call it did
+    // not ask for. Missing intent is not a failure — the prompt simply omits the
+    // section and is byte-identical to a pre-Intent-Layer run. Note this must NOT
+    // go through failAll: unlike the diff, intent is enrichment.
+    // Emitted as a `tool` step so it shows amber in the Live Log next to the
+    // other I/O the run does, and so someone watching a prong can see WHEN the
+    // intent was picked up rather than inferring it from the prompt afterwards.
+    //
+    // The label says "Loading", not "Deriving", and the distinction is the
+    // feature's whole cost guarantee: derivation happens on `GET /pulls/:id`,
+    // and `intent.it.test.ts` asserts a review issues no PrIntent model call.
+    // A log line saying "Deriving" during a run would contradict the invariant
+    // the test exists to protect.
+    let intentBlock: string | undefined;
+    try {
+      intentBlock = await runLog.step(
+        'Loading PR intent',
+        async () => renderIntentBlock(await this.repo.getIntent(pull.id)),
+        { kind: 'tool' },
+      );
+      runLog.info(
+        intentBlock
+          ? 'PR intent loaded — injecting it as untrusted context'
+          : 'No stored PR intent — reviewing without the intent section',
+      );
+    } catch (err) {
+      runLog.error(`Could not load PR intent: ${(err as Error).message} — continuing without it`);
+    }
+
     for (const { agent, runId } of jobs) {
       const agentStart = Date.now();
       logger?.info(
@@ -112,7 +165,16 @@ export class ReviewRunExecutor {
         `review: agent "${agent.name}" started (${agent.provider}/${agent.model})`,
       );
       try {
-        const outcome = await this.runOneAgent(workspaceId, pull, repo, diff, agent, runId, runLog);
+        const outcome = await this.runOneAgent(
+          workspaceId,
+          pull,
+          repo,
+          diff,
+          agent,
+          runId,
+          runLog,
+          intentBlock,
+        );
         logger?.info(
           {
             runId,
@@ -144,6 +206,7 @@ export class ReviewRunExecutor {
     agent: AgentRow,
     runId: string,
     parentLog: RunLogger,
+    intentBlock?: string,
   ): Promise<RunOutcome> {
     const start = Date.now();
     // Narrow the fanned-out pre-work logger to THIS run; the shared diff/intent
@@ -220,6 +283,10 @@ export class ReviewRunExecutor {
         // PR author's description/body — untrusted; assemblePrompt wraps +
         // truncates it. Omitted when the PR has no body.
         ...(pull.body ? { prDescription: pull.body } : {}),
+        // L03 — derived PR intent, same omit-when-empty contract. Already
+        // rendered (and empty-checked) by renderIntentBlock, so a PR with a blank
+        // stored intent still produces a byte-identical prompt.
+        ...(intentBlock ? { intent: intentBlock } : {}),
         task,
         sessionId: `${repo.owner}/${repo.name}#${pull.number}:${agent.name}`,
         onEvent: (e) => runLog.event(e.kind, e.msg, e.data),
@@ -228,6 +295,35 @@ export class ReviewRunExecutor {
         },
       });
       const { tokensIn, tokensOut, costUsd, grounding } = outcome;
+
+      // ---- Observability: what went INTO the prompt --------------------------
+      // Shape only — section, source, size, model, run id. Never the text: the
+      // prompt carries the diff, the PR body and whatever a referenced spec
+      // says. `metric` mirrors to stdout only, so this stays out of the Live Log
+      // and out of the persisted trace. Best-effort by construction — an
+      // observability record must never cost a completed review.
+      try {
+        runLog.metric(
+          'prompt assembly',
+          describePromptAssembly({
+            assembly: outcome.assembly,
+            diffRaw: diff.raw,
+            diffFiles: diff.files.length,
+            runId,
+            prId: pull.id,
+            agent: agent.name,
+            provider: agent.provider,
+            model: agent.model,
+            mode: outcome.mode,
+            countTokens: (text) => this.container.tokenizer.count(text),
+            verbose: this.container.config.promptLogVerbose,
+          }),
+        );
+      } catch (err) {
+        runLog.metric('prompt assembly logging skipped', {
+          error: (err as Error).message,
+        });
+      }
 
       const keptFindings = outcome.review.findings;
 
@@ -256,20 +352,7 @@ export class ReviewRunExecutor {
       // the timeline colors on, NOT the model's self-reported verdict.
       const blockers = countBlockers(keptFindings, agent.ciFailOn);
 
-      // ---- Observability: agent_runs + ONE run_traces document --------------
-      await this.repo.completeAgentRun(runId, {
-        status: 'done',
-        durationMs,
-        tokensIn,
-        tokensOut,
-        costUsd,
-        findingsCount: findingRows.length,
-        grounding,
-        score: outcome.review.score,
-        blockers,
-        error: null,
-      });
-
+      // ---- Observability: ONE run_traces document + agent_runs -------------
       const trace: RunTrace = {
         config: {
           agent: agent.name,
@@ -301,8 +384,32 @@ export class ReviewRunExecutor {
         // diff load + intent), not just events recorded inside this method.
         log: runLog.logFor(runId),
       };
+      /**
+       * ORDER IS LOAD-BEARING: the trace is written BEFORE the run is marked
+       * terminal, so anything that observes `agent_runs.status` and then reads
+       * `/runs/:id/trace` can never catch a 'done' run with an empty trace.
+       * The reverse order left a window that made `reviews.it.test.ts` flaky
+       * under parallel load (see server/INSIGHTS.md, 2026-08-17).
+       *
+       * Keeping `saveRunTrace` unguarded is deliberate: if the trace cannot be
+       * written the catch below marks the run 'failed' — which is the same net
+       * outcome as before, since the old order overwrote its own 'done' row
+       * from that catch anyway.
+       */
       runLog.info('Run complete; trace persisted');
       await this.repo.saveRunTrace(runId, trace);
+      await this.repo.completeAgentRun(runId, {
+        status: 'done',
+        durationMs,
+        tokensIn,
+        tokensOut,
+        costUsd,
+        findingsCount: findingRows.length,
+        grounding,
+        score: outcome.review.score,
+        blockers,
+        error: null,
+      });
       this.container.runBus.complete(runId);
 
       return { review, findings: findingRows, grounding, raw: outcome.review };
@@ -313,6 +420,10 @@ export class ReviewRunExecutor {
       const status = cancelled ? 'cancelled' : 'failed';
       const msg = cancelled ? 'Cancelled by user' : (err as Error).message;
       runLog.error(cancelled ? 'Run cancelled by user' : `Run failed: ${msg}`);
+      // Trace BEFORE status — see the ordering note on the success path.
+      await this.repo
+        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start))
+        .catch(() => undefined);
       await this.repo
         .completeAgentRun(runId, {
           status,
@@ -324,9 +435,6 @@ export class ReviewRunExecutor {
           grounding: '0/0 passed',
           error: msg,
         })
-        .catch(() => undefined);
-      await this.repo
-        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start))
         .catch(() => undefined);
       this.container.runBus.complete(runId);
       throw err;

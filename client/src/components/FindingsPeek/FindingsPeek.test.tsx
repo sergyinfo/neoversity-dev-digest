@@ -22,7 +22,7 @@ function finding(o: Partial<FindingRecord> & { id: string }): FindingRecord {
     severity: "CRITICAL",
     category: "security",
     title: "SSRF via user-supplied URL",
-    rationale: "An untrusted `callback_url` drives an outbound request.",
+    explanation: "An untrusted `callback_url` drives an outbound request.",
     suggestion: null,
     confidence: 0.8,
     kind: "finding",
@@ -127,7 +127,7 @@ describe("FindingsPeek — the preview", () => {
     render(
       <FindingsPeek
         counts={counts}
-        items={[finding({ id: "f1", rationale: "A **live** key in `config.ts`." })]}
+        items={[finding({ id: "f1", explanation: "A **live** key in `config.ts`." })]}
       />,
     );
     fireEvent.mouseEnter(screen.getByRole("button"));

@@ -31,6 +31,7 @@ import type {
   AuthWorkspace,
   SecretsProvider,
   SecretKey,
+  WebFetchClient,
 } from '@devdigest/shared';
 import { parseUnifiedDiff } from './git/diff-parser.js';
 
@@ -310,6 +311,23 @@ export class MockCodeIndex implements CodeIndex {
   }
   async references(_repo: RepoRef, symbol: string): Promise<CodeReference[]> {
     return [{ fromPath: 'src/api/public/index.ts', toSymbol: symbol, line: 23 }];
+  }
+}
+
+// ---------- Mock WebFetchClient ----------
+/**
+ * Serves canned documents by URL. An unknown URL REJECTS rather than returning
+ * '' — reference resolution is best-effort by design, and a silent empty string
+ * would let a test pass while proving nothing about the skip path.
+ */
+export class MockWebFetchClient implements WebFetchClient {
+  readonly calls: string[] = [];
+  constructor(private docs: Record<string, string> = {}) {}
+  async fetch(url: string): Promise<string> {
+    this.calls.push(url);
+    const doc = this.docs[url];
+    if (doc === undefined) throw new Error(`MockWebFetchClient: no document for ${url}`);
+    return doc;
   }
 }
 

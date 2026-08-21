@@ -3,6 +3,7 @@ import {
   Review,
   Finding,
   Intent,
+  PrIntentRecord,
   BlastRadius,
   Risks,
   PrHistory,
@@ -36,7 +37,7 @@ describe('AI contracts parse fixtures', () => {
           file: 'src/config.ts',
           start_line: 12,
           end_line: 12,
-          rationale: 'Line 12 contains a literal `sk_live_` Stripe key.',
+          explanation: 'Line 12 contains a literal `sk_live_` Stripe key.',
           suggestion: 'Move to env and rotate.',
           confidence: 0.98,
           kind: 'secret_leak',
@@ -56,7 +57,8 @@ describe('AI contracts parse fixtures', () => {
       file: 'src/api/public/webhooks.ts',
       start_line: 61,
       end_line: 74,
-      rationale: 'all three legs present',
+      explanation: 'all three legs present',
+      suggestion: 'Break one leg: drop the exfil path or gate the untrusted input.',
       confidence: 0.79,
       kind: 'lethal_trifecta',
       trifecta_components: ['private_data_access', 'untrusted_input', 'exfil_path'],
@@ -68,6 +70,33 @@ describe('AI contracts parse fixtures', () => {
   it('Intent / BlastRadius / Risks / PrHistory', () => {
     expect(() =>
       Intent.parse({ intent: 'x', in_scope: ['a'], out_of_scope: ['b'] }),
+    ).not.toThrow();
+    // confidence/sources are nullish so intents persisted before the Intent
+    // Layer still parse — the assertion above is that same back-compat case.
+    const withConfidence = Intent.parse({
+      intent: 'x',
+      in_scope: ['a'],
+      out_of_scope: ['b'],
+      confidence: 'low',
+      sources: ['branch', 'file_paths'],
+    });
+    expect(withConfidence.confidence).toBe('low');
+    expect(withConfidence.sources).toEqual(['branch', 'file_paths']);
+    expect(() =>
+      Intent.parse({ intent: 'x', in_scope: [], out_of_scope: [], confidence: 'certain' }),
+    ).toThrow();
+    expect(() =>
+      PrIntentRecord.parse({
+        pr_id: 'p1',
+        intent: 'x',
+        in_scope: [],
+        out_of_scope: [],
+        confidence: 'high',
+        sources: ['spec'],
+        head_sha: 'abc123',
+        model: 'deepseek/deepseek-v4-flash',
+        derived_at: '2026-08-17T00:00:00.000Z',
+      }),
     ).not.toThrow();
     expect(() =>
       BlastRadius.parse({

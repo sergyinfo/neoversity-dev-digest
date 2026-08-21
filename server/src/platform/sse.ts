@@ -72,6 +72,25 @@ export class RunBus {
     return this.buffers.get(runId) ?? [];
   }
 
+  /**
+   * Take everything buffered under a key and forget it.
+   *
+   * For work that happens OUTSIDE a run but belongs in a run's log — PR intent
+   * is derived when the PR is opened, not when it is reviewed, so it is staged
+   * under the PR id and replayed into the next run that starts.
+   *
+   * Draining is what keeps that staging area bounded: a buffer nobody drains
+   * grows for as long as the process lives, and unlike a run's buffer this one
+   * is never released by `complete()`.
+   */
+  drain(key: string): RunEvent[] {
+    const events = this.buffers.get(key) ?? [];
+    this.buffers.delete(key);
+    this.seq.delete(key);
+    this.emitters.delete(key);
+    return events;
+  }
+
   /** Signal completion and release buffers/emitters. */
   complete(runId: string): void {
     const e = this.emitters.get(runId);
