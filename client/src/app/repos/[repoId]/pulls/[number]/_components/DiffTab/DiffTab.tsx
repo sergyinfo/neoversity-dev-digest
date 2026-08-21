@@ -15,11 +15,17 @@ interface DiffTabProps {
   files: PrFile[];
   /** Inline commenting is offered only on open PRs (GitHub rejects otherwise). */
   canComment?: boolean;
+  /**
+   * Open a flagged line's finding in the Findings tab. Supplied by the page,
+   * which already holds both the review data needed to resolve (path, line) to
+   * a finding id and the query-param helper that drives the tabs.
+   */
+  onOpenFinding?: (path: string, line: number) => void;
 }
 
 type Order = "smart" | "original";
 
-export function DiffTab({ prId, filesCount, files, canComment }: DiffTabProps) {
+export function DiffTab({ prId, filesCount, files, canComment, onOpenFinding }: DiffTabProps) {
   const { data: comments } = usePrComments(prId);
   const create = useCreatePrComment(prId);
   // Comments start hidden so the diff is clean by default — toggle to reveal.
@@ -88,7 +94,12 @@ export function DiffTab({ prId, filesCount, files, canComment }: DiffTabProps) {
         Files changed · {filesCount} files
       </SectionLabel>
       {smartReady ? (
-        <SmartDiffViewer smartDiff={smartDiff} files={files} commenting={commenting} />
+        <SmartDiffViewer
+          smartDiff={smartDiff}
+          files={files}
+          commenting={commenting}
+          onOpenFinding={onOpenFinding}
+        />
       ) : (
         <DiffViewer files={files} commenting={commenting} />
       )}

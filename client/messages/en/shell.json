@@ -42,6 +42,7 @@
     "postedToGitHub": "Posts to GitHub immediately",
     "outdatedTitle": "{count} comment(s) on older revisions",
     "findingCount": "{count, plural, one {# finding} other {# findings}}",
-    "jumpToFinding": "Jump to the first flagged line"
+    "jumpToFinding": "Jump to the first flagged line",
+    "openInFindings": "Open this finding in the Findings tab"
   }
 }

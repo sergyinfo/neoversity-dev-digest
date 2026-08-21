@@ -15,11 +15,18 @@ export function SmartDiffViewer({
   smartDiff,
   files,
   commenting,
+  onOpenFinding,
 }: {
   smartDiff: SmartDiff;
   /** The raw PR files — Smart Diff carries paths and stats, not patch text. */
   files: PrFile[];
   commenting?: DiffCommentApi;
+  /**
+   * Jump to a flagged line's finding in the Findings tab. Resolving a
+   * (path, line) pair to a finding id needs the review data, which this
+   * component does not fetch — so the owner does it and passes the handler in.
+   */
+  onOpenFinding?: (path: string, line: number) => void;
 }) {
   // The API returns paths; the patch to render still comes from the PR payload
   // the page already has. Keeping them separate means Smart Diff never has to
@@ -61,6 +68,11 @@ export function SmartDiffViewer({
                       commenting={commenting}
                       defaultOpen={defaultOpenFor(role, f.finding_lines.length)}
                       findingLines={f.finding_lines}
+                      onOpenFindings={
+                        onOpenFinding && f.finding_lines.length > 0
+                          ? () => onOpenFinding(f.path, f.finding_lines[0]!)
+                          : undefined
+                      }
                     />
                   );
                 })}

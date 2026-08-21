@@ -80,6 +80,17 @@ export const s = {
     background: "var(--code-highlight, rgba(210,153,34,.14))",
     transition: "background .3s",
   } satisfies CSSProperties,
+  /** "Open in the Findings tab" affordance, beside the findings chip. */
+  findingLink: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: 3,
+    borderRadius: 5,
+    cursor: "pointer",
+    color: "var(--text-muted)",
+    background: "transparent",
+    border: "1px solid var(--border)",
+  } satisfies CSSProperties,
   /** Clickable "N findings" chip in a file header. */
   findingBadge: {
     display: "inline-flex",

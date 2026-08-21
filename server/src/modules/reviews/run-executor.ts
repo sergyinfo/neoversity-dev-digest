@@ -118,9 +118,22 @@ export class ReviewRunExecutor {
     // not ask for. Missing intent is not a failure — the prompt simply omits the
     // section and is byte-identical to a pre-Intent-Layer run. Note this must NOT
     // go through failAll: unlike the diff, intent is enrichment.
+    // Emitted as a `tool` step so it shows amber in the Live Log next to the
+    // other I/O the run does, and so someone watching a prong can see WHEN the
+    // intent was picked up rather than inferring it from the prompt afterwards.
+    //
+    // The label says "Loading", not "Deriving", and the distinction is the
+    // feature's whole cost guarantee: derivation happens on `GET /pulls/:id`,
+    // and `intent.it.test.ts` asserts a review issues no PrIntent model call.
+    // A log line saying "Deriving" during a run would contradict the invariant
+    // the test exists to protect.
     let intentBlock: string | undefined;
     try {
-      intentBlock = renderIntentBlock(await this.repo.getIntent(pull.id));
+      intentBlock = await runLog.step(
+        'Loading PR intent',
+        async () => renderIntentBlock(await this.repo.getIntent(pull.id)),
+        { kind: 'tool' },
+      );
       runLog.info(
         intentBlock
           ? 'PR intent loaded — injecting it as untrusted context'

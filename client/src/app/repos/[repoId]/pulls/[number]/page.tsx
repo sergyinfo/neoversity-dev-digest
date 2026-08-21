@@ -84,6 +84,51 @@ export default function PRDetailPage() {
   const lethalTrifecta = allFindings.filter((f) => f.kind === "lethal_trifecta");
   const findingsCount = allFindings.length;
 
+  /**
+   * Smart Diff → Findings. Resolves a flagged (path, line) back to the finding
+   * it came from and opens the Findings tab on it.
+   *
+   * Only the LATEST run is searched, because that is the run Smart Diff's
+   * `finding_lines` came from; scanning every run could land on a finding from
+   * a superseded review that no longer matches what the badge counted.
+   *
+   * `push`, not `replace`: this is a navigation the reader chose, so Back should
+   * return them to the diff they were reading. Both params move in one call so
+   * it costs one history entry, not two.
+   */
+  const openFindingFromDiff = (path: string, line: number) => {
+    const latest = runs[0]?.findings ?? [];
+    const hit =
+      latest.find((f) => f.file === path && f.start_line === line) ??
+      latest.find((f) => f.file === path);
+    const sp = new URLSearchParams(search.toString());
+    sp.set("tab", "findings");
+    if (hit) sp.set("finding", hit.id);
+    else sp.delete("finding");
+    router.push(`/repos/${repoId}/pulls/${number}?${sp.toString()}`);
+  };
+
+  // Scroll the targeted finding into view once the Findings tab has rendered it.
+  // `FindingCard` already carries a `data-finding-id` anchor, so this needs no
+  // prop drilling through FindingsTab → ReviewRunAccordion → FindingsPanel.
+  // It retries briefly because the card mounts a frame or two after the param
+  // changes, and its run's accordion may still be opening.
+  const focusFindingId = search.get("finding");
+  React.useEffect(() => {
+    if (!focusFindingId || tab !== "findings") return;
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      const el = document.querySelector(`[data-finding-id="${focusFindingId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        window.clearInterval(timer);
+      } else if (++tries > 20) {
+        window.clearInterval(timer);
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [focusFindingId, tab, findingsCount]);
+
   const repoName = activeRepo?.full_name ?? repoId;
   // The real "owner/repo" (null until the repo is loaded) — used to build
   // github.com deep-links for the header and finding file references.
@@ -185,6 +230,7 @@ export default function PRDetailPage() {
             prId={prId}
             filesCount={pr.files_count}
             files={pr.files}
+            onOpenFinding={openFindingFromDiff}
             canComment={pr.status === "open"}
           />
         )}

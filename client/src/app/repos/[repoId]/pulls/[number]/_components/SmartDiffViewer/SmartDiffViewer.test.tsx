@@ -69,10 +69,13 @@ const smartDiff: SmartDiff = {
   split_suggestion: { too_big: false, total_lines: 1248, proposed_splits: [] },
 };
 
-function renderViewer(sd: SmartDiff = smartDiff) {
+function renderViewer(
+  sd: SmartDiff = smartDiff,
+  onOpenFinding?: (path: string, line: number) => void,
+) {
   return render(
     <NextIntlClientProvider locale="en" messages={{ shell: messages }}>
-      <SmartDiffViewer smartDiff={sd} files={files} />
+      <SmartDiffViewer smartDiff={sd} files={files} onOpenFinding={onOpenFinding} />
     </NextIntlClientProvider>,
   );
 }
@@ -150,5 +153,30 @@ describe("SmartDiffViewer", () => {
     // a bare getByText would match two nodes and pass for the wrong reason.
     expect(note.textContent).toMatch(/It could split along: src\/middleware/);
     expect(note.textContent).toMatch(/1248 changed/);
+  });
+  it("offers a Findings link only when a handler is supplied", () => {
+    renderViewer();
+    expect(screen.queryByRole("button", { name: /Findings tab/i })).toBeNull();
+
+    cleanup();
+    renderViewer(smartDiff, vi.fn());
+    expect(screen.getByRole("button", { name: /Findings tab/i })).toBeInTheDocument();
+  });
+
+  it("hands the flagged file and its first line to the Findings handler", () => {
+    const onOpenFinding = vi.fn();
+    renderViewer(smartDiff, onOpenFinding);
+    fireEvent.click(screen.getByRole("button", { name: /Findings tab/i }));
+    expect(onOpenFinding).toHaveBeenCalledWith("src/middleware/ratelimit.ts", 25);
+  });
+
+  it("keeps the badge's in-diff jump separate from the Findings link", () => {
+    const onOpenFinding = vi.fn();
+    renderViewer(smartDiff, onOpenFinding);
+    // Clicking the count must still scroll within the diff, NOT navigate away —
+    // the two affordances sit side by side precisely so neither replaces the other.
+    fireEvent.click(screen.getByRole("button", { name: /2 findings/i }));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(onOpenFinding).not.toHaveBeenCalled();
   });
 });

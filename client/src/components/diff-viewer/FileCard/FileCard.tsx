@@ -35,6 +35,7 @@ export function FileCard({
   commenting,
   defaultOpen,
   findingLines,
+  onOpenFindings,
 }: {
   file: PrFile;
   commenting?: DiffCommentApi;
@@ -46,6 +47,13 @@ export function FileCard({
   defaultOpen?: boolean;
   /** New-side line numbers flagged by the latest review. Drives the badge. */
   findingLines?: number[];
+  /**
+   * Open this file's first finding in the Findings tab. Optional, and passed in
+   * rather than routed here on purpose: `diff-viewer` is shared across routes
+   * and must not know that a Findings tab exists. Absent → the control is not
+   * rendered, and the badge's in-diff jump is the only affordance.
+   */
+  onOpenFindings?: () => void;
 }) {
   const t = useTranslations("shell");
   const [open, setOpen] = React.useState(
@@ -120,6 +128,20 @@ export function FileCard({
           >
             <Icon.AlertTriangle size={11} />
             {t("diffViewer.findingCount", { count: flagged.size })}
+          </button>
+        )}
+        {flagged.size > 0 && onOpenFindings && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenFindings();
+            }}
+            title={t("diffViewer.openInFindings")}
+            aria-label={t("diffViewer.openInFindings")}
+            style={s.findingLink}
+          >
+            <Icon.ArrowRight size={12} />
           </button>
         )}
         {commentCount > 0 && (
