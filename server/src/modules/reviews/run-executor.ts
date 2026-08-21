@@ -73,6 +73,21 @@ export class ReviewRunExecutor {
       { prId: pull.id },
     );
 
+    // Intent is derived when the PR is OPENED, not when it is reviewed — so by
+    // the time a run starts, the interesting part already happened and nobody
+    // watching the Live Log saw it. Those steps were staged under the PR id
+    // (see modules/pulls/routes.ts); replay them here as the first thing in the
+    // run, carrying their ORIGINAL clock time so the log does not imply the
+    // derivation happened just now.
+    //
+    // Draining rather than reading keeps the staging buffer bounded and stops a
+    // second run from replaying the same history twice.
+    const staged = this.container.runBus.drain(pull.id);
+    if (staged.length > 0) {
+      runLog.info(`PR intent was prepared when this PR was opened — replaying ${staged.length} step(s):`);
+      for (const e of staged) runLog.event(e.kind, `[${e.t}] ${e.msg}`);
+    }
+
     // Pre-work failure (e.g. diff load) fails EVERY queued run. The error was
     // already emitted via runLog (fanned out → in each run's buffer); here we
     // mark the rows failed and persist the buffered log so it survives a reload.

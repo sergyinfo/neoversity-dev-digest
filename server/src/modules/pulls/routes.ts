@@ -14,6 +14,7 @@ import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { AppError, NotFoundError } from '../../platform/errors.js';
 import { deriveReviewStatus } from './status.js';
+import { RunLogger } from '../../platform/run-logger.js';
 
 /**
  * F1 — pulls module. PR import via Octokit (list + per-PR detail).
@@ -347,11 +348,34 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
      */
     async function deriveIntentForDetail(prId: string, headSha: string | null) {
       if (container.config.nodeEnv === 'test') return null;
+
+      // Staged under the PR id, not a run id: this happens when the PR is
+      // OPENED, and no run exists yet. `run-executor` drains it into the Live
+      // Log of the next review, so a reader watching a run still sees when the
+      // intent it is using was produced. Nothing subscribes to this key.
+      const prLog = new RunLogger(container.runBus, [prId], req.log, { prId });
+      const startedAt = Date.now();
       try {
-        return await container.intent(req.log).getOrCompute(workspaceId, prId, {
-          headSha,
-        });
+        const record = await prLog.step(
+          'Deriving PR intent',
+          () => container.intent(req.log).getOrCompute(workspaceId, prId, { headSha }),
+          { kind: 'tool' },
+        );
+
+        // `getOrCompute` is silent about which branch it took, and the honest
+        // line differs: a cache hit must not be reported as a derivation. The
+        // stored row's own timestamp settles it — one written before this call
+        // started cannot have come from it.
+        const derivedNow =
+          record.derived_at != null && new Date(record.derived_at).getTime() >= startedAt;
+        prLog.info(
+          derivedNow
+            ? `PR intent derived with ${record.model ?? 'the configured model'} (confidence: ${record.confidence})`
+            : 'PR intent served from cache — head unchanged, no model call',
+        );
+        return record;
       } catch (err) {
+        prLog.error(`Could not derive PR intent: ${(err as Error).message} — serving without it`);
         req.log.warn({ err, prId }, 'intent derivation skipped; serving PR detail without it');
         return null;
       }

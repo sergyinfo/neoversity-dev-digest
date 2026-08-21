@@ -213,3 +213,41 @@ describe('RunLogger.metric — ops-only channel', () => {
     expect(published).toHaveLength(1);
   });
 });
+
+describe('RunBus.drain — staging work that happens outside a run', () => {
+  it('returns the buffered events and empties the key', async () => {
+    const { RunBus } = await import('../src/platform/sse.js');
+    const bus = new RunBus();
+    bus.publish('pr-1', 'tool', 'Deriving PR intent…');
+    bus.publish('pr-1', 'info', 'PR intent derived');
+
+    const drained = bus.drain('pr-1');
+    expect(drained.map((e) => e.msg)).toEqual(['Deriving PR intent…', 'PR intent derived']);
+    // Draining is what keeps the staging buffer bounded — a second run must not
+    // replay the same history again.
+    expect(bus.drain('pr-1')).toEqual([]);
+    expect(bus.buffer('pr-1')).toEqual([]);
+  });
+
+  it('stamps each event with the time it actually happened', async () => {
+    const { RunBus } = await import('../src/platform/sse.js');
+    const bus = new RunBus();
+    bus.publish('pr-2', 'tool', 'Deriving PR intent…');
+    const [event] = bus.drain('pr-2');
+    expect(event!.t).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
+  it('does not disturb a different key', async () => {
+    const { RunBus } = await import('../src/platform/sse.js');
+    const bus = new RunBus();
+    bus.publish('pr-3', 'info', 'staged');
+    bus.publish('run-9', 'info', 'a real run');
+    bus.drain('pr-3');
+    expect(bus.buffer('run-9').map((e) => e.msg)).toEqual(['a real run']);
+  });
+
+  it('an empty key drains to nothing rather than throwing', async () => {
+    const { RunBus } = await import('../src/platform/sse.js');
+    expect(new RunBus().drain('never-used')).toEqual([]);
+  });
+});
