@@ -25,5 +25,5 @@ user asks about FIRST — these are curated and may already answer it — then r
 
 ## Use when
 - Stack, commands, architecture, how to run → read `README.md`
-- Working inside a package → read that package's CLAUDE.md: `server/CLAUDE.md`, `client/CLAUDE.md`, `reviewer-core/CLAUDE.md`, `e2e/CLAUDE.md`
+- Working inside a package → read that package's CLAUDE.md: `server/CLAUDE.md`, `client/CLAUDE.md`, `reviewer-core/CLAUDE.md`, `e2e/CLAUDE.md`, `mcp/CLAUDE.md`
 - Agent prompt templates → read `docs/agent-prompts/`
