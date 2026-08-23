@@ -128,6 +128,13 @@ export interface ResolvedCallerRow {
   toSymbol: string;
   line: number;
   rank: number;
+  /**
+   * The file the referenced symbol is declared in. Selected so the FACADE can
+   * drop self-references (`fromPath === declFile`) — the ripgrep path already
+   * does this inline, and doing it in the facade rather than in SQL keeps the
+   * rule unit-testable against a stubbed repository.
+   */
+  declFile: string;
 }
 
 export class RepoIntelRepository {
@@ -436,6 +443,23 @@ export class RepoIntelRepository {
       .where(eq(t.fileEdges.repoId, repoId));
   }
 
+  /**
+   * Edges pointing AT the given files — "who imports these?".
+   *
+   * This is the reverse direction of `getEdges`, and it is the whole point of
+   * the `(repoId, toFile)` index: see the note on `fileEdges` in
+   * `db/schema/repo-intel.ts` — *"the reverse-lookup index (repoId, toFile) is
+   * what blast uses to walk 'who depends on this file?'"*. Do not confuse this
+   * with `getCriticalPaths`, which walks importer → imported.
+   */
+  async getImporters(repoId: string, files: string[]): Promise<IndexerEdgeRow[]> {
+    if (files.length === 0) return [];
+    return this.db
+      .select({ fromFile: t.fileEdges.fromFile, toFile: t.fileEdges.toFile })
+      .from(t.fileEdges)
+      .where(and(eq(t.fileEdges.repoId, repoId), inArray(t.fileEdges.toFile, files)));
+  }
+
   /** `{path, percentile}` for the given paths (smart-diff / run-executor). */
   async getFileRankFor(repoId: string, paths: string[]): Promise<FileRankRow[]> {
     if (paths.length === 0) return [];
@@ -512,6 +536,9 @@ export class RepoIntelRepository {
         toSymbol: t.references.toSymbol,
         line: t.references.line,
         rank: t.fileRank.rank,
+        // Non-null by construction: the WHERE below matches declFile against
+        // `declFiles`, so every returned row has one.
+        declFile: sql<string>`${t.references.declFile}`,
       })
       .from(t.references)
       .innerJoin(
