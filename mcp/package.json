@@ -1,0 +1,28 @@
+{
+  "name": "@devdigest/mcp",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "devdigest-mcp — MCP server exposing the DevDigest reviewer to any MCP client.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "inspect": "npx -y @modelcontextprotocol/inspector tsx src/index.ts",
+    "test": "vitest run",
+    "devdigest": "node ./bin/devdigest.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "bin": {
+    "devdigest": "./bin/devdigest.mjs"
+  }
+}

@@ -7,6 +7,9 @@ import { type ReviewDto, type ReviewDtoFinding } from './helpers.js';
 import { ReviewRunExecutor, type Logger } from './run-executor.js';
 import { actOnFinding as actOnFindingImpl } from './findings.js';
 import { reviewToDto } from './helpers.js';
+import { WORKING_TREE_PR_NUMBER, splitDiffByFile } from './diff-review.js';
+import { and, eq } from 'drizzle-orm';
+import * as t from '../../db/schema.js';
 
 // Re-export DTO types + converters for backward-compatible imports from
 // './service.js' (these previously lived here; logic now in ./helpers.ts).
@@ -54,6 +57,98 @@ export class ReviewService {
       return [agent];
     }
     throw new AppError('invalid_run_request', 'Provide agentId or all:true', 400);
+  }
+
+  /**
+   * Review a RAW diff — the pre-push CLI's entry point.
+   *
+   * Reuses `runReview` verbatim rather than reimplementing anything: the diff is
+   * persisted as `pr_files` on a synthetic pull request, and the executor picks
+   * it up through the same reconstruction path an offline PR uses. Grounding,
+   * agent selection, the run trace and persistence are all untouched.
+   *
+   * The pseudo-PR is number 0, upserted on the existing `pr_repo_number_uq`
+   * index, so repeated CLI runs reuse one row instead of littering the repo with
+   * a PR per invocation. It is deliberately visible in the web UI as "Working
+   * tree" — a CLI run you cannot open and inspect is a worse trade than an extra
+   * row in a list.
+   */
+  async runDiffReview(
+    workspaceId: string,
+    input: { repoFullName: string; diff: string; label?: string; agentId?: string; all?: boolean },
+    logger?: Logger,
+  ) {
+    const [repo] = await this.container.db
+      .select({ id: t.repos.id, fullName: t.repos.fullName })
+      .from(t.repos)
+      .where(and(eq(t.repos.workspaceId, workspaceId), eq(t.repos.fullName, input.repoFullName)))
+      .limit(1);
+    if (!repo) {
+      throw new NotFoundError(
+        `Repository "${input.repoFullName}" is not imported into DevDigest — add it in the web app first.`,
+      );
+    }
+
+    const files = splitDiffByFile(input.diff);
+    if (files.length === 0) {
+      throw new AppError('empty_diff', 'The diff contains no reviewable file changes.', 400);
+    }
+
+    const title = input.label ?? 'Working tree';
+    const [pull] = await this.container.db
+      .insert(t.pullRequests)
+      .values({
+        workspaceId,
+        repoId: repo.id,
+        number: WORKING_TREE_PR_NUMBER,
+        title,
+        author: 'local',
+        branch: 'HEAD',
+        base: 'working',
+        headSha: 'working',
+        additions: files.reduce((n, f) => n + f.additions, 0),
+        deletions: files.reduce((n, f) => n + f.deletions, 0),
+        filesCount: files.length,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [t.pullRequests.repoId, t.pullRequests.number],
+        set: {
+          title,
+          additions: files.reduce((n, f) => n + f.additions, 0),
+          deletions: files.reduce((n, f) => n + f.deletions, 0),
+          filesCount: files.length,
+          updatedAt: new Date(),
+        },
+      })
+      .returning({ id: t.pullRequests.id });
+    if (!pull) throw new AppError('pr_upsert_failed', 'Could not create the working-tree PR', 500);
+
+    // Replace, never append: the working tree is a snapshot, not a history.
+    //
+    // In ONE transaction — two CLI runs against the same repo share this pseudo
+    // PR, and an unwrapped delete+insert lets a concurrent run observe (or
+    // review) an empty file set between the two statements. Found by our own
+    // Security Reviewer on this very change.
+    await this.container.db.transaction(async (tx) => {
+      await tx.delete(t.prFiles).where(eq(t.prFiles.prId, pull.id));
+      await tx.insert(t.prFiles).values(
+        files.map((f) => ({
+          prId: pull.id,
+          path: f.path,
+          additions: f.additions,
+          deletions: f.deletions,
+          patch: f.patch,
+        })),
+      );
+    });
+
+    const targets = await this.resolveTargets(workspaceId, {
+      ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+      ...(input.all !== undefined ? { all: input.all } : {}),
+    });
+    const { runs } = await this.runReview(workspaceId, pull.id, targets, logger);
+    return { pr_id: pull.id, runs };
   }
 
   /** Delete a whole review run (one agent's pass) + its findings (cascade). */

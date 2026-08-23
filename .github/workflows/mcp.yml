@@ -1,0 +1,61 @@
+# MCP suite — the devdigest-mcp server and the `devdigest review` CLI.
+# Typecheck (which covers test/ here, unlike server/) + vitest. Hermetic: no API,
+# no DB, no network — `fetch` is mocked and the protocol test runs over an
+# in-memory transport.
+#
+# The path filter covers three things, not one:
+#   mcp/**                       the package itself
+#   server/src/vendor/shared/**  reached through a tsconfig alias, so a contract
+#                                change can break this typecheck
+#   server/src/modules/blast/**  get_blast_radius calls that route, and nothing
+#                                automated binds the tool to its shape — so a
+#                                rename there should at least re-run this suite
+name: mcp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp/**'
+      - 'server/src/vendor/shared/**'
+      - 'server/src/modules/blast/**'
+      - '.github/workflows/mcp.yml'
+  pull_request:
+    paths:
+      - 'mcp/**'
+      - 'server/src/vendor/shared/**'
+      - 'server/src/modules/blast/**'
+      - '.github/workflows/mcp.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: mcp/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
