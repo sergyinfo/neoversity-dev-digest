@@ -52,9 +52,22 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: mcp/pnpm-lock.yaml
+          cache-dependency-path: |
+            mcp/pnpm-lock.yaml
+            server/pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile
+
+      # `@devdigest/shared` is a tsconfig alias onto ../server/src/vendor/shared,
+      # and those contracts `import { z } from 'zod'` — which resolves out of
+      # server/node_modules, not this package's (mcp is zod 4, the contracts are
+      # zod 3; see mcp/INSIGHTS.md). Without this the typecheck fails with
+      # "Cannot find module 'zod'" on every contract file, and every downstream
+      # implicit-any cascades from that. `--ignore-scripts` because only the type
+      # declarations are needed here — no native build has to run.
+      - name: install server deps (the vendored contracts resolve zod there)
+        working-directory: server
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - run: pnpm typecheck
 
