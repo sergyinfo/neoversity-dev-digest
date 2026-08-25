@@ -25,7 +25,13 @@ import type { BlastResponse, BlastSummaryResponse } from './contract.js';
 
 const MAX_SYMBOLS_IN_PROMPT = 12;
 const MAX_CALLERS_PER_SYMBOL_IN_PROMPT = 6;
-const MAX_TOKENS = 400;
+/**
+ * One paragraph, not a report. The acceptance criterion caps the optional
+ * summary at 150 tokens; the SYSTEM prompt below asks for 3-4 sentences, which
+ * fits with room to spare (~110 words), so this is a guard rail rather than the
+ * thing that shapes the answer.
+ */
+const MAX_TOKENS = 150;
 
 const SYSTEM = [
   'You explain the blast radius of a code change to a reviewer.',
@@ -35,7 +41,7 @@ const SYSTEM = [
   'edges, endpoints or risks that are not present in the map, and do not guess',
   'at what the code does — you have not seen it.',
   '',
-  'Write ONE short paragraph (3-5 sentences) telling the reviewer where to look',
+  'Write ONE short paragraph (3-4 sentences) telling the reviewer where to look',
   'first and why. Prefer naming the highest-fan-out symbol and any HTTP',
   'endpoints that can be reached. If the map is small, say so plainly rather',
   'than inflating it.',
