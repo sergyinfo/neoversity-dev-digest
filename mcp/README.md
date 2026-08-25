@@ -20,7 +20,7 @@ flowchart LR
 |------|-------|----------------|
 | `list_agents` | `enabled_only?` | `GET /agents` |
 | `run_review` | `repo`, `pr`, `agent?` | `GET /pulls/:id` **then** `POST /pulls/:id/review` |
-| `get_findings` | `repo`, `pr`, `severity?`, `agent?`, `limit?`, `format?` | `GET /pulls/:id/reviews` |
+| `get_findings` | `repo`, `pr`, `severity?`, `agent?`, `all_runs?`, `limit?`, `format?` | `GET /pulls/:id/reviews` |
 | `get_conventions` | `repo`, `status?` | `GET /repos/:id/conventions` |
 | `get_blast_radius` | `repo`, `pr` | `GET /pulls/:id/blast` |
 
@@ -61,7 +61,7 @@ Measured on this server:
 | What | Cost |
 |------|------|
 | `instructions` (always in context, even when tools are deferred) | 448 chars |
-| All five tool definitions (`tools/list`) | 3 777 chars ≈ **944 tokens** |
+| All five tool definitions (`tools/list`) | 3 888 chars ≈ **972 tokens** |
 
 Both numbers are **asserted by `test/context-budget.test.ts`**, which prints them
 on every run. A copy change that blows the budget fails the suite instead of
@@ -83,6 +83,17 @@ Design choices that keep the number down:
 - **Every tool caps its own output** (`src/format.ts`) well under Claude Code's
   25 000-token limit, and says how to narrow the query instead of cutting
   silently. `get_findings` also has `format: "concise" | "detailed"`.
+
+### `get_findings` returns the latest run per agent
+
+A PR accumulates runs — one per agent, plus every re-run. Merging them reports a
+finding from a **superseded** run as if it were still current; measured on this
+repo's working-tree PR, which reached nine `Security Reviewer` reviews, that
+surfaced a finding against a file that had already been deleted. So the default
+keeps only the newest review per agent, and `all_runs: true` asks for the
+history. The count of hidden runs is always stated, never dropped in silence.
+The same rule, for the same reason, is applied server-side at
+`server/src/modules/smart-diff/service.ts:36-38`.
 
 If a future tool must return more, annotate it with
 `_meta["anthropic/maxResultSizeChars"]` (ceiling 500 000 chars) rather than

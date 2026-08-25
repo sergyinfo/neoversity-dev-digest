@@ -26,6 +26,10 @@ export function registerGetFindings(server: McpServer): void {
           .optional()
           .describe('Keep only this severity'),
         agent: z.string().optional().describe('Keep only findings from this agent name'),
+        all_runs: z
+          .boolean()
+          .optional()
+          .describe('Include superseded runs (default: only the latest run per agent)'),
         limit: z.number().int().min(1).max(100).optional().describe('Max findings (default 20)'),
         format: z
           .enum(['concise', 'detailed'])
@@ -34,7 +38,7 @@ export function registerGetFindings(server: McpServer): void {
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ repo, pr, severity, agent, limit, format }) =>
+    async ({ repo, pr, severity, agent, all_runs, limit, format }) =>
       guard(async () => {
         const { repo: repoRow, pr: prRow } = await resolvePr(repo, pr);
         const reviews = await apiGet<ReviewRecord[]>(`/pulls/${prRow.id}/reviews`);
@@ -47,8 +51,33 @@ export function registerGetFindings(server: McpServer): void {
         }
 
         const wantAgent = agent?.trim().toLowerCase();
-        const all = reviews
-          .filter((r) => !wantAgent || (r.agent_name ?? '').toLowerCase().includes(wantAgent))
+        const matching = reviews.filter(
+          (r) => !wantAgent || (r.agent_name ?? '').toLowerCase().includes(wantAgent),
+        );
+
+        // Latest run per agent unless history is asked for. Same rule, and the same
+        // reason, as `server/src/modules/smart-diff/service.ts:36-38`: a PR carries
+        // one run per agent plus re-runs, and merging them reports a finding from a
+        // SUPERSEDED run as if it were still current — including findings against
+        // files that no longer exist. `GET /pulls/:id/reviews` is newest-first; the
+        // sort re-establishes that here rather than depending on it.
+        const byRecency = [...matching].sort((a, b) =>
+          (b.created_at ?? '').localeCompare(a.created_at ?? ''),
+        );
+        const seen = new Set<string>();
+        const selected = all_runs
+          ? byRecency
+          : byRecency.filter((r) => {
+              const key = r.agent_name ?? r.agent_id ?? r.id;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+        const superseded = byRecency.length - selected.length;
+        // Never drop data silently: say history exists and name the way to see it.
+        const hidden = superseded > 0 ? ` · ${superseded} superseded run(s) hidden, pass all_runs=true` : '';
+
+        const all = selected
           .flatMap((r) => r.findings.map((f) => ({ ...f, agent: r.agent_name ?? 'agent' })))
           .filter((f) => !severity || f.severity === severity)
           .sort((a, b) => RANK[a.severity] - RANK[b.severity] || b.confidence - a.confidence);
@@ -57,8 +86,8 @@ export function registerGetFindings(server: McpServer): void {
           const filters = [severity, agent].filter(Boolean).join(' + ');
           return ok(
             `No findings on ${repoRow.full_name} #${pr}${filters ? ` matching ${filters}` : ''}. ` +
-              `${reviews.length} review(s) exist; ` +
-              `verdicts: ${reviews.map((r) => `${r.agent_name ?? 'agent'}=${r.verdict ?? '—'}`).join(', ')}.`,
+              `${selected.length} review(s) considered${hidden}; ` +
+              `verdicts: ${selected.map((r) => `${r.agent_name ?? 'agent'}=${r.verdict ?? '—'}`).join(', ')}.`,
           );
         }
 
@@ -78,6 +107,7 @@ export function registerGetFindings(server: McpServer): void {
 
         const header =
           `${all.length} finding(s) on ${repoRow.full_name} #${pr} — "${prRow.title}"` +
+          hidden +
           (shown.length < all.length
             ? ` · showing ${shown.length}, narrow with severity/agent or raise limit`
             : '');

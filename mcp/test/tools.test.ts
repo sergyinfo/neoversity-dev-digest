@@ -113,6 +113,52 @@ describe('get_findings', () => {
     expect(t).toMatch(/approve/);
   });
 
+  // Re-runs accumulate: the working-tree PR in this repo reached 9 reviews from a
+  // single agent. Merging them reported a finding against a file that had since
+  // been deleted as if it were current — the defect this covers.
+  const RERUNS = [
+    {
+      id: 'new',
+      run_id: 'r2',
+      agent_name: 'Security Reviewer',
+      verdict: 'approve',
+      created_at: '2026-08-24T19:53:00.000Z',
+      findings: [],
+    },
+    {
+      id: 'old',
+      run_id: 'r1',
+      agent_name: 'Security Reviewer',
+      verdict: 'comment',
+      created_at: '2026-08-24T19:27:00.000Z',
+      findings: [
+        { id: 'g1', severity: 'WARNING', category: 'security', title: 'Stale finding', file: 'gone.ts', start_line: 1, end_line: 1, explanation: 'e', suggestion: 's', confidence: 1 },
+      ],
+    },
+  ];
+
+  it('keeps only the latest run per agent, and says history was hidden', async () => {
+    const h = await withRoutes(base([{ match: '/pulls/p1/reviews', body: RERUNS }]));
+    const t = textOf(await h.call('get_findings', { repo: 'acme/app', pr: 7 }));
+    expect(t).not.toContain('Stale finding');
+    expect(t).toMatch(/1 superseded run\(s\) hidden/);
+    expect(t).toMatch(/all_runs=true/);
+  });
+
+  it('all_runs=true brings the superseded runs back', async () => {
+    const h = await withRoutes(base([{ match: '/pulls/p1/reviews', body: RERUNS }]));
+    const t = textOf(await h.call('get_findings', { repo: 'acme/app', pr: 7, all_runs: true }));
+    expect(t).toContain('Stale finding');
+    expect(t).not.toMatch(/superseded/);
+  });
+
+  it('picks the newest by created_at, not by array order', async () => {
+    const reordered = [RERUNS[1], RERUNS[0]];
+    const h = await withRoutes(base([{ match: '/pulls/p1/reviews', body: reordered }]));
+    const t = textOf(await h.call('get_findings', { repo: 'acme/app', pr: 7 }));
+    expect(t).not.toContain('Stale finding');
+  });
+
   it('rejects a missing required argument at the protocol layer', async () => {
     const h = await withRoutes(routes());
     const r = await h.call('get_findings', { repo: 'acme/app' });
