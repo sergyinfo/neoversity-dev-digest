@@ -37,6 +37,8 @@ import type {
   IndexResult,
   IndexState,
   RefRow,
+  DependentFileRow,
+  FileFactsRow,
   RepoIntel,
   RepoMapResult,
   SignatureRow,
@@ -354,6 +356,13 @@ export class RepoIntelService implements RepoIntel {
     const callers: BlastCallerRow[] = [];
     const seenCaller = new Set<string>();
     for (const c of callerRows) {
+      // Skip the symbol's own declaring file. The ripgrep path has always done
+      // this (`if (r.fromPath === sym.file) continue`); the persistent path did
+      // not, because getResolvedCallers filters on decl_file without excluding
+      // self-references — so a helper used inside its own module counted itself
+      // as downstream impact.
+      if (c.fromPath === c.declFile) continue;
+
       const enclosing =
         enclosingFromRows(symsByFile.get(c.fromPath) ?? [], c.line) ??
         c.fromPath.split('/').pop() ??
@@ -369,7 +378,6 @@ export class RepoIntelService implements RepoIntel {
         rank: c.rank,
       });
     }
-    callers.sort((a, b) => b.rank - a.rank);
 
     // Precomputed facts per caller file (endpoints + crons), so consumers can
     // attribute them to the changed symbol whose callers live in that file.
@@ -383,11 +391,67 @@ export class RepoIntelService implements RepoIntel {
 
     return {
       changedSymbols,
-      callers: callers.slice(0, MAX_CALLERS_PER_SYMBOL),
+      callers: capPerSymbol(callers),
       impactedEndpoints: [...endpoints],
       factsByFile,
       degraded: false,
     };
+  }
+
+  /**
+   * Files that DEPEND ON `files`, walking the import graph BACKWARDS from them,
+   * bounded to `depth` hops (default `BFS_DEPTH` = 2).
+   *
+   * Direction is the whole point and is the easy thing to get wrong: this
+   * answers "who depends on me?" using the `(repoId, toFile)` reverse index on
+   * `file_edges`. `getCriticalPaths` walks the opposite way (importer →
+   * imported) and must NOT be copied here.
+   *
+   * The seed files themselves are never returned — only their dependents. No
+   * clone access; index reads only.
+   */
+  async getDependentFiles(
+    repoId: string,
+    files: string[],
+    depth: number = BFS_DEPTH,
+  ): Promise<DependentFileRow[]> {
+    if (!this.container.config.repoIntelEnabled || files.length === 0 || depth < 1) return [];
+
+    const seen = new Set(files); // seeds are excluded from the result
+    const out: DependentFileRow[] = [];
+    // Each frontier entry remembers which seed file it descends from, so a
+    // depth-2 dependent is still attributable to the changed file it reaches.
+    let frontier = [...new Set(files)].map((f) => ({ file: f, via: f }));
+
+    for (let hop = 1; hop <= depth && frontier.length > 0; hop += 1) {
+      const viaByFile = new Map(frontier.map((f) => [f.file, f.via]));
+      const edges = await this.repo.getImporters(
+        repoId,
+        frontier.map((f) => f.file),
+      );
+      const next: { file: string; via: string }[] = [];
+      for (const e of edges) {
+        // `fromFile` imports `toFile`, so fromFile is the dependent.
+        if (seen.has(e.fromFile)) continue; // also terminates cycles
+        seen.add(e.fromFile);
+        const via = viaByFile.get(e.toFile) ?? e.toFile;
+        out.push({ file: e.fromFile, depth: hop, via });
+        next.push({ file: e.fromFile, via });
+      }
+      frontier = next;
+    }
+
+    return out;
+  }
+
+  /**
+   * Precomputed endpoints/crons for the given files. Pure index read — the
+   * whole reason `file_facts` exists is so consumers never re-parse the clone
+   * for this (see the table comment in `db/schema/repo-intel.ts`).
+   */
+  async getFileFacts(repoId: string, files: string[]): Promise<FileFactsRow[]> {
+    if (!this.container.config.repoIntelEnabled || files.length === 0) return [];
+    return this.repo.getFileFacts(repoId, files);
   }
 
   /**
@@ -730,6 +794,34 @@ const JUNK_PATH_PATTERNS = [
 function isJunkPath(path: string): boolean {
   const lower = path.toLowerCase();
   return JUNK_PATH_PATTERNS.some((p) => lower.includes(p));
+}
+
+/**
+ * Keep the top `MAX_CALLERS_PER_SYMBOL` callers **per changed symbol**, ranked
+ * by file rank descending.
+ *
+ * This used to be a single `callers.slice(0, MAX_CALLERS_PER_SYMBOL)` over the
+ * whole flat array, which is a GLOBAL cap: two changed symbols with 25 callers
+ * each yielded 20 rows in total, and a high-ranked symbol could starve every
+ * other symbol out of the map entirely. The blast view groups by symbol, so the
+ * budget has to be per group.
+ *
+ * Group order follows first appearance so the output stays deterministic; within
+ * a group the order is rank-descending, then line ascending as a tiebreak.
+ */
+function capPerSymbol(callers: BlastCallerRow[]): BlastCallerRow[] {
+  const groups = new Map<string, BlastCallerRow[]>();
+  for (const c of callers) {
+    const arr = groups.get(c.viaSymbol);
+    if (arr) arr.push(c);
+    else groups.set(c.viaSymbol, [c]);
+  }
+  const out: BlastCallerRow[] = [];
+  for (const group of groups.values()) {
+    group.sort((a, b) => b.rank - a.rank || a.line - b.line);
+    out.push(...group.slice(0, MAX_CALLERS_PER_SYMBOL));
+  }
+  return out;
 }
 
 /** Enclosing top-level (bare-name) symbol for a line, from persistent rows. */

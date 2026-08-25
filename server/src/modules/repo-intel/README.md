@@ -39,6 +39,14 @@ touch the pipeline internals:
 - `getFileRank(repoId, files)` → importance percentile per changed file.
 - `getCallerSignatures(repoId, files, limit)` → callers of changed symbols.
 - `getBlastRadius(repoId, files)` → impacted symbols / callers (used by L04).
+  Callers are capped at 20 **per changed symbol** and exclude the symbol's own
+  declaring file.
+- `getDependentFiles(repoId, files, depth?)` → files that DEPEND ON these, walking
+  `file_edges` **backwards**, depth 2 by default. Each row carries the seed file it
+  was reached from. Not to be confused with `getCriticalPaths`, which walks the
+  other way.
+- `getFileFacts(repoId, files)` → precomputed endpoints/crons per file (an index
+  read, never a parse).
 - `getUnresolvedReferences(repoId, …)` → phantom-symbol detection (used by L06).
 - `getConventionSamples(repoId)` → top-ranked files for convention extraction (L02).
 

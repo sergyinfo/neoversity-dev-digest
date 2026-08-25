@@ -21,3 +21,18 @@ export async function getContext(
   ]);
   return { workspaceId: workspace.id, userId: user.id };
 }
+
+/**
+ * The workspace id alone, for the many handlers that never look at the user.
+ *
+ * Narrower than `getContext` on purpose: a handler that only scopes a query has
+ * no business holding a user id it might accidentally start trusting. Same
+ * resolution, same AuthProvider, one field.
+ */
+export async function getWorkspaceId(
+  container: Container,
+  req: FastifyRequest,
+): Promise<string> {
+  const { workspaceId } = await getContext(container, req);
+  return workspaceId;
+}

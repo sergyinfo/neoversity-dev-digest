@@ -71,6 +71,32 @@ export interface BlastCallerRow {
   rank: number;
 }
 
+/** A file reached by walking the import graph backwards, with its hop count. */
+export interface DependentFileRow {
+  file: string;
+  /** 1 = imports a changed file directly; 2 = imports a depth-1 dependent. */
+  depth: number;
+  /**
+   * The SEED file this dependent was reached from.
+   *
+   * Without it a consumer can only say "something in this diff is depended on
+   * by X" and has to attribute X to every changed file — which in practice
+   * attributes every endpoint in the app to every changed symbol. Keeping the
+   * origin is what makes per-symbol attribution honest.
+   */
+  via: string;
+}
+
+/**
+ * Precomputed per-file facts (HTTP endpoints and cron/job keys), written by the
+ * indexer so consumers never re-parse the clone to find them.
+ */
+export interface FileFactsRow {
+  filePath: string;
+  endpoints: string[];
+  crons: string[];
+}
+
 export interface BlastResult {
   changedSymbols: BlastChangedSymbol[];
   callers: BlastCallerRow[];
@@ -145,6 +171,24 @@ export interface RepoIntel {
 
   // --- Reads --------------------------------------------------------------
   getBlastRadius(repoId: string, changedFiles: string[]): Promise<BlastResult>;
+  /**
+   * Files that DEPEND ON the given files, walking the import graph BACKWARDS,
+   * bounded to `depth` hops (default `BFS_DEPTH` = 2). Used by blast to reach
+   * the HTTP endpoints a change can affect through modules it never names.
+   *
+   * Direction matters and is easy to get wrong: this answers "who depends on
+   * me?", NOT "what do I depend on?" (`getCriticalPaths` does the latter).
+   */
+  getDependentFiles(
+    repoId: string,
+    files: string[],
+    depth?: number,
+  ): Promise<DependentFileRow[]>;
+  /**
+   * Precomputed endpoints/crons for the given files — an INDEX read, never a
+   * parse. Files with no facts are simply absent from the result.
+   */
+  getFileFacts(repoId: string, files: string[]): Promise<FileFactsRow[]>;
   getRepoMap(repoId: string, tokenBudget?: number): Promise<RepoMapResult>;
   getFileRank(repoId: string, paths: string[]): Promise<FileRankRow[]>;
   getSymbolsInFiles(repoId: string, paths: string[]): Promise<SymbolRow[]>;
