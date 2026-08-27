@@ -16,6 +16,7 @@ that executes is a single call:
 |---|---|---|
 | [`/spec`](../commands/spec.md) | specification | you, manually |
 | [`/plan`](../commands/plan.md) | implementation plan | you, manually |
+| [`/cross-review`](../commands/cross-review.md) | independent read of the plan by another model family | you, manually, between plan and impl |
 | [`/impl`](../commands/impl.md) | implement → review → fix loop → verify → land | one call, gates only where it must stop |
 | [`/retro`](../commands/retro.md) | retrospective on how the pipeline performed, with proposals | **manual only** — `disable-model-invocation: true`; nothing summons it |
 
@@ -27,6 +28,20 @@ than patching around it.
 `minor` findings as follow-ups rather than fixes. A finding the implementer disputes with
 evidence becomes `contested` and goes to you — never quietly patched, because editing
 correct code to satisfy a false positive is the one review outcome nobody notices.
+
+**The plan gets an outside read before it is executed.** [`/cross-review`](../commands/cross-review.md)
+hands the spec and plan — and nothing about how we reached them — to a model from another
+family, then marks each finding confirmed / rejected / cannot tell against evidence before
+recording it. Withholding our reasoning is the point: a reviewer anchored on it inherits the
+blind spot the stage exists to break. No provider key is configured here, so the default route
+is a manual paste, and nothing leaves the machine without explicit confirmation.
+
+**Cost is controlled by what can actually be counted.** A command cannot meter its own token
+spend, so `/impl` binds on agent invocations instead: the planner declares an envelope per
+execution mode, `/impl` counts every subagent it launches against `--max-agents`, and stops
+at a stage boundary rather than assuming the next stage is cheap. Model tier comes from the
+plan and is never silently upgraded. `--max-usd` is recorded and reported, but marked
+advisory, because it cannot be verified from here.
 
 **`test-writer` is off in the default run** to save tokens. Coverage rides on the plan
 instead: every step that changes observable behaviour carries a `Test:` line, and the
@@ -55,7 +70,8 @@ flowchart LR
     R -->|findings + evidence| P
     P -->|review + questions + plan| PC{{"/plan"}}
     PC -->|answers, accepted recs, mode| P
-    PC -->|docs/plans/feature.md| O((orchestrator))
+    PC -->|docs/plans/feature.md| XR{{"/cross-review"}}
+    XR -->|cross-review.md| O((orchestrator))
     O -->|single-agent pass or multi-agent run| I[implementer]
     I -->|settled diff| AR[architecture-reviewer]
     I -->|settled diff| CR["/code-review"]

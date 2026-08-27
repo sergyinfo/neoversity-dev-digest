@@ -43,9 +43,25 @@ planner's run — so settle it here.
 
   A contract sketch is a **table of fields and meanings**, never a code block. If a reader
   could paste it into the repo and have it compile, you went too far.
-- **Every requirement is testable.** If a sentence cannot fail, it is not a requirement: cut
-  it or turn it into one. "Fast", "intuitive", "robust", "user-friendly" are banned unless
-  followed by a number or an observable condition.
+- **Every requirement is testable, and written in EARS.** If a sentence cannot fail, it is
+  not a requirement: cut it or turn it into one. "Fast", "intuitive", "robust",
+  "user-friendly" are banned unless followed by a number or an observable condition. Use the
+  EARS pattern that matches the requirement's shape, and never mix two in one line:
+
+  | Pattern | Shape | Use for |
+  |---|---|---|
+  | Ubiquitous | THE SYSTEM SHALL … | an always-true property |
+  | Event-driven | WHEN <trigger> THE SYSTEM SHALL … | something happens |
+  | State-driven | WHILE <state> THE SYSTEM SHALL … | a condition holds over time |
+  | Unwanted | IF <condition> THEN THE SYSTEM SHALL … | errors, failures, abuse |
+  | Optional | WHERE <feature is present> THE SYSTEM SHALL … | a configurable or optional surface |
+
+  EARS is a discipline, not decoration: it forces you to name the trigger, and a requirement
+  whose trigger you cannot name is one nobody can test.
+- **Every input carries its provenance.** For anything the feature consumes — a field, a
+  section, a document, a computed summary — say where it comes from, whether it is trusted or
+  untrusted, how fresh it is, and what happens when it is absent. An input with no stated
+  origin is one the implementer will invent a source for.
 - **Blocking questions are asked, not buried.** When an answer would change the
   specification rather than decorate it, you do not guess and you do not write around it —
   you return it in `## Blocking questions` and stop. **At most six**, so a spec run stays
@@ -325,9 +341,11 @@ it. No solution.>
 `file:line` that proves it.>
 
 ## 4. Requirements
-| ID | Requirement | Rationale | Status today |
-|---|---|---|---|
-| REQ-1 | <testable statement> | <why> | absent / partial (`file:line`) |
+| ID | Requirement (EARS) | Pattern | Rationale | Status today |
+|---|---|---|---|---|
+| REQ-1 | WHEN … THE SYSTEM SHALL … | event-driven | <why> | absent / partial (`file:line`) |
+<One EARS pattern per row, named in its own column so a reader can see at a glance whether
+the trigger was actually identified.>
 
 ## 5. Acceptance criteria
 | ID | Covers | Given / When / Then | Verified by |
@@ -356,10 +374,20 @@ done.>
 | From | To | What crosses | On failure | Owns the data |
 |---|---|---|---|---|
 
-## 10. Contract & data expectations
+## 10. Contract, data & input provenance
 | Field | Type (in prose) | Required | Meaning | Absent → consumer does |
 |---|---|---|---|---|
 <Only fields whose shape is part of the agreement. A table, never a code block.>
+
+**Input provenance** — one row per thing the feature consumes. This is what stops an
+implementer inventing a source, and what lets a reviewer judge whether a claim the feature
+makes is grounded.
+
+| Input | Comes from | Trust | Freshness | Absent → feature does |
+|---|---|---|---|---|
+<`Comes from` names the module, endpoint, table or file — never "the system". `Trust` is
+trusted / untrusted, and decides how it may be framed to a model. `Freshness` says how stale
+it can be and whether the feature can tell.>
 
 <Then, in prose: what must be true of the data for the feature to work — what must exist,
 what may be absent, what may be stale and for how long. Not schema design.>
@@ -422,7 +450,9 @@ failing check is fixed **before** you return, not reported as a known flaw; the 
 `n/a` is something the environment prevented, such as Chrome being unavailable.
 
 1. **Already-shipped check ran** on every requirement, by search — not assumed.
-2. **Every REQ is falsifiable** and has at least one AC with a `Verified by` kind.
+2. **Every REQ is falsifiable**, written in a named EARS pattern with its trigger stated,
+   and has at least one AC with a `Verified by` kind.
+2a. **Every input has a provenance row** naming its origin, trust level and absent-behaviour.
 3. **Traceability table has no blank cells** — no orphan REQ, AC, or corner case.
 4. **Out of scope is non-empty** and names what already ships.
 5. **Every corner-case dimension was considered**, and the misses are visible in §6 or §14.

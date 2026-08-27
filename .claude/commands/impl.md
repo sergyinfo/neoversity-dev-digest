@@ -1,6 +1,6 @@
 ---
 description: Execute an approved implementation plan end to end — implement, review through three lenses, run a bounded fix loop, verify against the plan, and land. The spec and the plan are made separately with /spec and /plan; this command never writes either.
-argument-hint: [--plan <path>] [--mode single|multi] [--resume <feature>]
+argument-hint: [--plan <path>] [--mode single|multi] [--max-agents <n>] [--max-usd <n>] [--resume <feature>]
 allowed-tools: Task, AskUserQuestion, SendMessage, Skill, Read, Write, Edit, Glob, Grep, Bash(date:*), Bash(ls:*), Bash(mkdir:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git branch:*), Bash(pnpm typecheck:*), Bash(pnpm exec vitest:*), Bash(pnpm test:*), Bash(npm run typecheck:*), Bash(npm test:*)
 model: opus
 ---
@@ -26,6 +26,7 @@ not plan.
 |---|---|---|
 | Specification | [`/spec`](spec.md) | you, manually, before this |
 | Implementation plan | [`/plan`](plan.md) | you, manually, before this |
+| Cross-model review of the plan | [`/cross-review`](cross-review.md) | you, manually, before this |
 | **Everything after** | `/impl` | this command |
 
 If `--plan` is absent, list `docs/plans/*.md` newest first and ask which one — never guess,
@@ -61,6 +62,33 @@ The log is what makes `--resume` possible and the run auditable afterwards. If t
 runs out of room, the log plus the plan is enough to continue in a fresh one — say so rather
 than squeezing the last stage in.
 
+## Cost limits
+
+**Be honest about what you can enforce.** You cannot meter your own token spend from inside
+this command — there is no counter to read. Pretending otherwise produces a number that is
+made up, and a made-up budget is worse than none.
+
+What you *can* enforce, and must:
+
+| Control | How it binds |
+|---|---|
+| `--max-agents <n>` | Count every subagent you launch, including fix rounds and re-reviews. It is a real number you own. Default: the plan's declared envelope, or 12 if it declares none |
+| Model per track | Take it from the plan. Never silently upgrade a track from `sonnet` to `opus` because a step "looks hard" — that is where budgets die |
+| Fix rounds | Two, already fixed. A third is a decision, not a default |
+| Test scope | `vitest related` during implementation, the full gate once at Stage 4. Re-running a full suite per step is the largest avoidable cost in this pipeline |
+| Re-review scope | The round's delta only, and only by reviewers that produced findings |
+| `--max-usd <n>` | **Advisory only.** You cannot verify it. Record it in the log, report the agent count and model tiers against it, and let the user judge |
+
+**Checkpoints.** At every stage boundary, write the running agent count to the log. When it
+reaches the ceiling, **stop and ask** — never continue on the assumption that the next stage
+is cheap. When a single stage needs more than the whole remaining budget, say which stage and
+what it would cost before spending it.
+
+**What blows a budget here, in order:** unscoped test runs, re-reviewing the whole diff each
+fix round, a multi-agent run whose tracks each re-read the entire plan, and upgrading a track
+to `opus` off-plan. All four are structural, and all four are already closed by the rules
+above — keep them closed.
+
 ---
 
 ## Stage 0 — intake & baseline
@@ -75,7 +103,9 @@ than squeezing the last stage in.
    packages the plan names, `--reporter=dot`. Record what was **already red**. Without it a
    pre-existing failure gets blamed on this change and burns a fix round.
 5. One `AskUserQuestion`: execution mode (if `--mode` was not given), commit policy
-   (per stage / at the end / never), and whether to run `doc-writer` at the end.
+   (per stage / at the end / never), the agent ceiling (if `--max-agents` was not given —
+   offer the plan's declared envelope as the default), and whether to run `doc-writer` at
+   the end.
 6. Write the run log.
 
 ## Stage 1 — implementation
@@ -87,6 +117,8 @@ set** — never the whole plan — and respecting every barrier the plan declare
 land and `diff -rq` is clean before consumers start; `db:generate` → `db:migrate` is serial;
 exactly one track owns `server/src/modules/index.ts`; parallel writers in one package need
 worktree isolation or they queue.
+
+**Checkpoint:** write the agent count so far to the log before moving on.
 
 **Cheap gate, no extra tokens:** read each implementer's `## Plan coverage` table. A step
 marked `skipped` or `partial` is dealt with **now** — one repair round, or the user's call —
@@ -179,7 +211,9 @@ for still fails.
    agents emitted. They were told not to write it themselves: parallel tracks appending to
    one append-only file collide.
 3. Commit per the Stage 0 policy. Never push, never open a PR unless asked.
-4. Final report — the run log, plus what is still open and who owns it.
+4. Final report — the run log, plus what is still open and who owns it, and the **agent
+   count against the ceiling** with the model tier of each track. That line is the cost
+   report: it is the honest one, because every number in it is one you counted.
 
 ---
 

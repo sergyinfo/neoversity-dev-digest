@@ -97,8 +97,10 @@ Report: the path written, the requirements-review verdicts by count (with `alrea
 and `conflicting` named), the questions settled, the recommendations accepted and rejected,
 and the chosen execution mode.
 
-**Do not start execution in the same turn.** Say what would run first under the chosen mode
-and wait for an explicit go. Planning and executing in one breath removes the only moment
+**Do not start execution in the same turn.** The next stage is `/cross-review` — an
+independent read of this plan by a model from another family, whose note is committed
+alongside the plan and before any feature code. Say what would run first under the chosen
+mode and wait for an explicit go. Planning and executing in one breath removes the only moment
 the user gets to read the plan.
 
 ## Boundaries

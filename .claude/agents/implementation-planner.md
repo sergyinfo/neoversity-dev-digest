@@ -356,6 +356,14 @@ serial wall-clock cost honestly.>
 
 **Recommended mode:** <one of the two, in one sentence, with the deciding factor.>
 
+## Cost envelope
+| Mode | Agent invocations | Model tiers | What dominates the cost |
+|---|---|---|---|
+| single-agent | <n, counting implementer + reviewers + verifier + fix rounds> | … | … |
+| multi-agent | <n, counting one implementer per track> | … | … |
+<Count fix rounds at the budgeted two. `/impl` checks its `--max-agents` ceiling against
+this, so a number you did not actually count is a ceiling that fails to bind.>
+
 ## Risks & open questions
 <Including anything you could not verify and what would settle it.>
 
@@ -374,6 +382,7 @@ questions are separated from assumptions; recommendations are outside the steps 
 was silently planned; every step has a checkable "done when", a `Test` line, and every path was read
 or listed this session; steps touching protected zones are called out, not buried; the
 verification table has no lint row; **both** execution decompositions are present, the
-multi-agent one respects every barrier rule and names a model and a brief per track, and the
-mode question is asked rather than decided; every acceptance criterion from the spec has a
+multi-agent one respects every barrier rule and names a model and a brief per track, the cost
+envelope counts agent invocations for both modes, and the mode question is asked rather than
+decided; every acceptance criterion from the spec has a
 row in the verification table and a covering step; nothing in the repository was modified.
