@@ -12,3 +12,4 @@ and files are `implementation-planner`'s output in `docs/plans/`. Written by `/s
 | Spec | Status | Covers |
 |---|---|---|
 | [project-context/01-project-context.md](project-context/01-project-context.md) | approved | Attaching repository markdown to agents and skills, token estimates and budget, injection into the review prompt, and the per-run record in Prompt Assembly |
+| [brief/01-pr-why-risk-brief.md](brief/01-pr-why-risk-brief.md) | approved | The Why & Risk card: assembling a PR brief from five grounded inputs in one model call, the state fingerprint that makes re-opens free, and click-through from review focus into the diff |

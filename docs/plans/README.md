@@ -8,3 +8,9 @@ against the plan that was actually agreed.
 
 Plans are point-in-time records. A landed feature's durable documentation belongs in
 `<package>/docs/` (written by `doc-writer`); a gotcha belongs in a package `INSIGHTS.md`.
+
+## Index
+
+| Plan | Spec | Mode | Status |
+|---|---|---|---|
+| [pr-why-risk-brief.md](pr-why-risk-brief.md) | [`server/specs/brief/01-pr-why-risk-brief.md`](../../server/specs/brief/01-pr-why-risk-brief.md) | multi-agent, 13 agents | awaiting `/cross-review` |
