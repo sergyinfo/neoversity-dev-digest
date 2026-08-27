@@ -32,6 +32,7 @@ import { type DepGraph, DepCruiseGraph } from '../adapters/depgraph/index.js';
 import { type Tokenizer, TiktokenTokenizer } from '../adapters/tokenizer/index.js';
 import { HttpWebFetchClient } from '../adapters/http/web-fetch.js';
 import { IntentService, type Logger as IntentLogger } from '../modules/intent/service.js';
+import { BlastService } from '../modules/blast/service.js';
 
 /**
  * DI container. One per app instance. Holds config, db, the JobRunner,
@@ -81,6 +82,7 @@ export class Container {
   private _depgraph?: DepGraph;
   private _tokenizer?: Tokenizer;
   private _webFetch?: WebFetchClient;
+  private _blast?: BlastService;
   private _priceBook?: PriceBook;
 
   constructor(config: AppConfig, db: Db, private overrides: ContainerOverrides = {}) {
@@ -167,6 +169,23 @@ export class Container {
    */
   intent(logger?: IntentLogger): IntentService {
     return new IntentService(this, logger);
+  }
+
+  /**
+   * Blast Radius service (L04), reached the same way as `repoIntel` so no
+   * consumer has to import another module's service class.
+   *
+   * A cached GETTER, and deliberately not the `intent(logger)` METHOD shape
+   * next to it: that method exists because `IntentService` takes the
+   * per-request pino logger, and the container is per-app, so a cached instance
+   * would pin the first request's logger onto every later request.
+   * `BlastService`'s constructor takes the container and nothing else — it
+   * holds no per-request state — so that hazard does not apply here, and the
+   * getter saves rebuilding its `BlastRepository` on every call.
+   */
+  get blast(): BlastService {
+    this._blast ??= new BlastService(this);
+    return this._blast;
   }
 
   /**
