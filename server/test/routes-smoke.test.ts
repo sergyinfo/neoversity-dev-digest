@@ -53,6 +53,31 @@ describe('routes (no DB)', () => {
     await app.close();
   });
 
+  /**
+   * L05 — the two brief routes are REGISTERED, and their params schema is
+   * wired.
+   *
+   * `hasRoute` proves registration (one import + one entry in
+   * `modules/index.ts`); the 422 proves the shared `IdParams` schema really is
+   * attached, since a bad uuid must be refused at the edge rather than reaching
+   * the handler and becoming a database error. Neither touches the DB, so this
+   * stays in the no-Docker suite.
+   */
+  it('registers GET and POST /pulls/:id/brief with param validation', async () => {
+    const app = await buildApp({ config });
+
+    expect(app.hasRoute({ method: 'GET', url: '/pulls/:id/brief' })).toBe(true);
+    expect(app.hasRoute({ method: 'POST', url: '/pulls/:id/brief' })).toBe(true);
+
+    for (const method of ['GET', 'POST'] as const) {
+      const res = await app.inject({ method, url: '/pulls/not-a-uuid/brief' });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('validation_error');
+    }
+
+    await app.close();
+  });
+
   it('returns 422 structured error on invalid body', async () => {
     const app = await buildApp({ config });
     const res = await app.inject({
