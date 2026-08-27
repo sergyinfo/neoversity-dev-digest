@@ -7,6 +7,15 @@ import {
   SECURITY_REVIEWER_PROMPT,
   PERFORMANCE_REVIEWER_PROMPT,
 } from './seed-prompts.js';
+import { defaultFeatureModel } from '../platform/feature-models.js';
+import { BriefRepository } from '../modules/brief/repository.js';
+import {
+  computeFingerprint,
+  localComponents,
+  serializeFingerprint,
+} from '../modules/brief/fingerprint.js';
+import { ASSEMBLER_VERSION } from '../modules/brief/constants.js';
+import type { BriefDocument, BriefProvenance } from '../modules/brief/contract.js';
 
 /** Default provider/model for the built-in reviewer agents. */
 const DEFAULT_PROVIDER = 'openrouter' as const;
@@ -120,7 +129,35 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
     await db.insert(t.prFiles).values([
       { prId: pr!.id, path: 'src/middleware/ratelimit.ts', additions: 84, deletions: 0 },
       { prId: pr!.id, path: 'src/api/public/webhooks.ts', additions: 31, deletions: 6 },
-      { prId: pr!.id, path: 'src/config.ts', additions: 4, deletions: 0 },
+      // `patch` carries HUNKS ONLY — no `diff --git`/`---`/`+++` header lines.
+      // `diffFromPrFiles` (reviews/diff-loader.ts) re-adds those itself, and
+      // the client's `parsePatch` (diff-viewer/helpers.ts) reads a bare `-`/`+`
+      // prefix per line, so a `---`/`+++` header would be mis-parsed as a
+      // deleted/added line (server/INSIGHTS.md 2026-08-23). New-side line 12
+      // lands on the Stripe secret key, matching the finding at :151-159 below
+      // and the seeded pr_brief's first review-focus entry (S18).
+      {
+        prId: pr!.id,
+        path: 'src/config.ts',
+        additions: 4,
+        deletions: 0,
+        patch: [
+          '@@ -1,9 +1,13 @@',
+          " import { z } from 'zod';",
+          ' ',
+          ' export const config = {',
+          '   port: Number(process.env.PORT ?? 3000),',
+          "   env: process.env.NODE_ENV ?? 'development',",
+          '   redis: {',
+          "     url: process.env.REDIS_URL ?? 'redis://localhost:6379',",
+          '   },',
+          '+  // Stripe keys — TODO: move to env before merging',
+          "+  stripePublishableKey: 'pk_live_EXAMPLE_NOT_A_REAL_KEY_0000',",
+          "+  webhookSecret: 'whsec_EXAMPLE_NOT_A_REAL_SECRET_0000',",
+          "+  stripeSecretKey: 'sk_live_EXAMPLE_NOT_A_REAL_KEY_0000',",
+          ' };',
+        ].join('\n'),
+      },
       { prId: pr!.id, path: 'src/api/users.ts', additions: 7, deletions: 2 },
     ]);
 
@@ -273,6 +310,130 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         confidence: 0.55,
       },
     ]);
+
+    // ---- L05 pr_brief: a stored brief that reads as a clean cache hit -------
+    //
+    // The read path (`brief/service.ts#get`) recomputes only the LOCAL half of
+    // the fingerprint (`brief/fingerprint.ts`) from the PR's current state and
+    // compares it component-by-component against what is stored — so the
+    // stored value must be produced by the SAME functions the service calls,
+    // not a hand-written digest, or a byte anywhere in the eight components
+    // disagrees and the card renders the out-of-date marker instead of a clean
+    // hit. The eight local components on a FRESH seed, and why each is what it
+    // is:
+    //   - head_sha: the PR's own seeded `headSha`.
+    //   - intent_derived_at / intent_model: no `pr_intent` row is seeded for
+    //     this PR (it is a zero-writer table until the intent lesson runs one),
+    //     so `container.intent(log).get()` returns null and both read 'none'.
+    //   - indexed_sha / blast_state: no repo-intel index exists on a fresh DB,
+    //     so `getIndexState` synthesises `{status: 'degraded', lastIndexedSha:
+    //     ''}` (`repo-intel/service.ts:191-206`) — indexed_sha is 'none',
+    //     blast_state is 'degraded'.
+    //   - model_provider / model_id: no `feature_models` override is seeded in
+    //     Settings, so `resolveFeatureModel` falls back to the registry default
+    //     for `risk_brief` — reused here via `defaultFeatureModel` rather than
+    //     hardcoding 'openai'/'gpt-4.1', so a registry change cannot silently
+    //     desync this fixture from what the service will compute.
+    //   - assembler_version: the module's own constant.
+    // The remote half (linked issue + reference documents) is 'none'/'none':
+    // the seeded PR body links no issue and no document.
+    const riskBriefModel = defaultFeatureModel('risk_brief');
+    const localState = localComponents({
+      headSha: pr!.headSha,
+      intent: null,
+      blast: { indexed_sha: null, state: 'degraded' },
+      model: riskBriefModel,
+      assemblerVersion: ASSEMBLER_VERSION,
+      issue: null,
+      documents: [],
+    });
+    const fingerprint = computeFingerprint({
+      headSha: pr!.headSha,
+      intent: null,
+      blast: { indexed_sha: null, state: 'degraded' },
+      model: riskBriefModel,
+      assemblerVersion: ASSEMBLER_VERSION,
+      issue: null,
+      documents: [],
+    });
+
+    const briefDocument: BriefDocument = {
+      what: 'Adds a token-bucket rate limiter in front of the public API endpoints, including a new config block that wires in Redis and Stripe credentials, and updates the webhook and user-list routes to use it.',
+      why: 'Unauthenticated clients could call the public endpoints without limit, so this change throttles them per client before the endpoints ship more broadly.',
+      risk_level: 'high',
+      risks: [
+        {
+          kind: 'security',
+          title: 'Hardcoded Stripe secret key in commit',
+          explanation:
+            'A literal `sk_live_` Stripe secret key is committed in plaintext, readable by anyone with repo access and preserved in history even after rotation.',
+          severity: 'high',
+          file_refs: ['src/config.ts:12'],
+        },
+        {
+          kind: 'security',
+          title: 'Limiter fails open when Redis is unreachable',
+          explanation:
+            'The catch around the Redis call returns `allowed: true`, so a Redis outage lifts the rate limit on every public route at once.',
+          severity: 'high',
+          file_refs: ['src/middleware/ratelimit.ts:61'],
+        },
+        {
+          kind: 'security',
+          title: 'Webhook signature checked after the body is consumed',
+          explanation:
+            'The raw body is parsed before `verifySignature`, which then reads a re-serialised object — a forged payload that round-trips to the same JSON passes.',
+          severity: 'medium',
+          file_refs: ['src/api/public/webhooks.ts:22'],
+        },
+      ],
+      // First entry MUST stay src/config.ts:12 — S19's flow clicks it by its
+      // accessible name to exercise the Files-tab jump (BQ-5/A).
+      review_focus: [
+        {
+          file: 'src/config.ts',
+          line: 12,
+          reason: 'Hardcoded Stripe secret key in commit',
+        },
+        {
+          file: 'src/middleware/ratelimit.ts',
+          line: 61,
+          reason: 'Limiter fails open when Redis is unreachable',
+        },
+        {
+          file: 'src/api/public/webhooks.ts',
+          line: 22,
+          reason: 'Webhook signature checked after the body is consumed',
+        },
+      ],
+    };
+
+    // No intent and no blast map contributed (both absent on a fresh seed);
+    // 'diff' is the one input this hand-assembled brief actually reflects.
+    const briefProvenance: BriefProvenance = {
+      inputs_used: ['diff'],
+      references_used: [],
+      references_skipped: [],
+      dropped_items: [],
+      estimated_input_tokens: 612,
+      tokens_in: 780,
+      tokens_out: 214,
+      cost_usd: 0.0064,
+      discarded_refs: 0,
+      model: riskBriefModel.model,
+    };
+
+    const briefRepo = new BriefRepository(db);
+    await briefRepo.upsertBrief(pr!.id, {
+      document: briefDocument,
+      fingerprint: serializeFingerprint(fingerprint, localState),
+      provenance: briefProvenance,
+      model: riskBriefModel.model,
+      costUsd: briefProvenance.cost_usd,
+      tokensIn: briefProvenance.tokens_in,
+      tokensOut: briefProvenance.tokens_out,
+      generatedAt: new Date('2026-08-25T09:00:00.000Z'),
+    });
   }
 
   // ---- built-in agents (the three starter presets) ----
