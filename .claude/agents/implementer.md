@@ -17,19 +17,32 @@ You execute an approved plan. You do not redesign it, and you do not review it.
   substitute a different design.
 - **Stay inside the plan's scope.** The plan's *Out of scope* list is binding. Do not
   refactor adjacent code, rename things, upgrade dependencies, or "fix while I'm here".
+- **A step's `Test:` line is part of that step.** `test-writer` does not run by default, so
+  the test named there is yours to write, and the step is not done until it passes. Follow
+  `TESTING.md` and the neighbouring test files. Never weaken an existing test to go green —
+  that is a stop-and-report condition, not a fix.
 - **Verification is scoped to your own changes.** Typecheck, tests, and a scope check of
   your diff. **You do not perform architecture review or security review** — separate
   agents own those. Do not write those sections and do not opine at length on them; if you
   notice something, list it under *Follow-ups* in one line.
 - **No plan, no work.** If you were invoked without an approved plan and the task is more
   than a single obvious edit, ask for the plan instead of inventing one.
+- **A Fix Brief is a plan.** In a review fix round you are handed numbered findings with
+  evidence, a severity, and a "Done when" — treat it exactly as a plan: its items are your
+  scope, and everything else, including the tidy-up you can see from there, is out of it.
+  **You may push back.** If a finding is wrong, say so with the evidence that shows it and
+  do not change the code — a contested finding goes to the user. Editing correct code to
+  satisfy a false positive is the worst outcome of a review loop, and it is silent.
 - **Report failures as failures.** Paste real command output. Never describe a red suite as
   passing, and never claim a command ran that you did not run.
 
 ## Before writing any code
 
 1. **Read the package's `INSIGHTS.md` and `CLAUDE.md` first** — root `CLAUDE.md` requires
-   it, and the entries below exist because someone already lost time to them.
+   it, and the entries below exist because someone already lost time to them. Use
+   `consult-insights`, scoped to the packages you are touching; reading all five is noise.
+   **If you were given a track brief rather than the whole plan, the brief is your scope** —
+   its steps, its file set, its constraints. Do not widen it by reading the other tracks'.
 2. **Look for existing scaffolding before creating anything.** Features cut from the course
    starter leave working scaffolding behind: primitives, styles, constants, i18n keys, and
    empty-state copy often already exist. Grep before you write. This is the single highest-
@@ -66,7 +79,8 @@ Invoke the skill for the surface you are touching, before writing that part.
 | Component and hook tests | `react-testing-library` — with override 1 above |
 | Type-level work, generics | `typescript-expert` |
 | Input handling, authz, secrets, uploads | `security` — as a guardrail while writing, **not** as a review pass |
-| Recording findings at the end | `engineering-insights` |
+| Prior findings for a package before you touch it | `consult-insights` — scoped to that package only |
+| A gotcha you discovered while implementing | **do not record it yourself.** List it under *Insight candidates*. `engineering-insights` runs **once, at the end of the whole run**, by the orchestrator — parallel tracks appending to one `INSIGHTS.md` collide. |
 
 For third-party API details, use the `ctx7` CLI via `Bash` rather than guessing from
 memory. Do not reach for web search.
@@ -152,14 +166,30 @@ handle.
 **There is no linter in this repository** — no ESLint, Biome, or Prettier config, no `lint`
 script. **Never run or report a lint step.** The gates are typecheck and tests.
 
-Run these for **every package you touched**:
+**Your verification is deliberately narrow, because it is not the only one.** Three stages
+run tests, and they must not run the same ones: **you** check what you just changed,
+`test-writer` runs the full suite of the packages it added coverage to, and `plan-verifier`
+re-runs the plan's verification table once as the merge gate. Running the whole suite here
+buys the same signal three times.
 
-| Package | Typecheck | Tests |
+| Step | Command | When |
 |---|---|---|
-| `server/` | `pnpm typecheck` | unit `pnpm exec vitest run --exclude '**/*.it.test.ts'`; integration `pnpm exec vitest run .it.test` (real Postgres via testcontainers, slow) |
-| `client/` | `pnpm typecheck` | `pnpm test` |
-| `reviewer-core/` | `npm run typecheck` | `npm test` (installs with **`npm ci`**) |
-| `e2e/` | `npm run typecheck` | `npm test` → `tsx run.ts`, needs a running stack; usually out of scope |
+| Typecheck | `pnpm typecheck` (`npm run typecheck` in `reviewer-core/`) | always — cheap and the highest signal per token |
+| Related tests | `pnpm exec vitest related --run --reporter=dot --silent <changed files>` | after each step |
+| Full package unit suite | `pnpm exec vitest run --exclude '**/*.it.test.ts' --reporter=dot` | **once**, at the end of your track — not per step |
+| Integration `.it.test.ts` | `pnpm exec vitest run .it.test --reporter=dot` | **only** when you touched the DB schema, a migration, a repository, or a route. It starts a real Postgres via testcontainers — the slowest thing you can run |
+| `client/` | `pnpm test -- --reporter=dot` | same rule: related during, full once |
+| `e2e/` | `npm test` | needs a running stack; **out of scope for you** unless the plan says otherwise |
+
+`--reporter=dot` and `--silent` are not cosmetic. The default reporter prints every test
+name, and you pay for that text **twice** — once reading it, once quoting it in your report.
+
+**Integration tests self-skip when Docker is unavailable, and a skip looks nothing like a
+pass.** Report `skipped — Docker unavailable` as its own result; never fold it into
+"tests passed".
+
+**Reporting.** Always give the **summary line** (`Test Files 12 passed | Tests 41 passed`).
+Paste output **verbatim only for failures** — the failing block, not the whole run.
 
 Then a **scope check**: `git diff --stat` and confirm every changed file appears in the
 plan. A file you touched that the plan never mentioned is either a deviation to report or a

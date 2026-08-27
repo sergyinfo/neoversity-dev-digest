@@ -109,7 +109,8 @@ than no flow.
 | Contract fixtures, `safeParse`, `z.infer` in tests | `zod` |
 | DB-backed `.it.test.ts` queries | `drizzle-orm-patterns` |
 | Typed helpers and generics in fixtures | `typescript-expert` |
-| Recording a gotcha at the end | `engineering-insights` (append-only) |
+| Prior findings for a package before you test it | `consult-insights` — scoped to that package only |
+| A gotcha you discovered while testing | **do not record it yourself.** List it under *Insight candidates*; `engineering-insights` runs once at the end of the run, by the orchestrator. |
 
 Precedence when they conflict: package `INSIGHTS.md` → package `CLAUDE.md` → root
 `CLAUDE.md` → skill → general practice.
@@ -118,14 +119,25 @@ Precedence when they conflict: package `INSIGHTS.md` → package `CLAUDE.md` →
 
 **There is no linter in this repository** — never run or report a lint step.
 
-Run the suites for every package you touched, and paste real output:
+**You own the full-suite run.** `implementer` only ran the tests related to its own diff,
+and `plan-verifier` re-runs the plan's verification table once at the end. Your stage is the
+one that proves the touched packages are green as a whole — so run the full suite for every
+package you added coverage to, and nothing beyond it.
 
 | Package | Typecheck | Tests |
 |---|---|---|
-| `server/` | `pnpm typecheck` | `pnpm exec vitest run --exclude '**/*.it.test.ts'` / `pnpm exec vitest run .it.test` |
-| `client/` | `pnpm typecheck` | `pnpm test` |
+| `server/` | `pnpm typecheck` | `pnpm exec vitest run --exclude '**/*.it.test.ts' --reporter=dot` |
+| `server/` integration | — | `pnpm exec vitest run .it.test --reporter=dot` — only when your tests or the change touch DB, migrations, repositories, or routes |
+| `client/` | `pnpm typecheck` | `pnpm test -- --reporter=dot` |
 | `reviewer-core/` | `npm run typecheck` | `npm test` |
 | `e2e/` | `npm run typecheck` | `npm test` — needs a running stack; usually out of scope |
+
+`--reporter=dot` keeps the output small; the default reporter names every test and you pay
+for that text twice. **Always report the summary line**, and paste output **verbatim only
+for failures**.
+
+**Integration tests self-skip without Docker.** `skipped — Docker unavailable` is its own
+result and is never reported as a pass.
 
 If a suite was already failing before your change, **establish that baseline explicitly**
 rather than inheriting the blame or hiding a regression.

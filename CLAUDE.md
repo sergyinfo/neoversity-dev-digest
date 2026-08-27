@@ -27,3 +27,6 @@ user asks about FIRST — these are curated and may already answer it — then r
 - Stack, commands, architecture, how to run → read `README.md`
 - Working inside a package → read that package's CLAUDE.md: `server/CLAUDE.md`, `client/CLAUDE.md`, `reviewer-core/CLAUDE.md`, `e2e/CLAUDE.md`, `mcp/CLAUDE.md`
 - Agent prompt templates → read `docs/agent-prompts/`
+- How the pipeline itself is performing → `docs/retro/ledger.md`, written by `/retro`.
+  **Manual only — never run `/retro` unprompted**, and never add it to the session protocol
+  above. It records process, not codebase; codebase findings stay with `engineering-insights`.

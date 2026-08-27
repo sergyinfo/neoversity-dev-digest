@@ -42,10 +42,10 @@ stop. If the request is concrete, skip this.
 
 ### Empty placeholders — destinations, not sources
 
-These seven contain only a `README.md` whose body ends "Empty for now.":
+These eight contain only a `README.md` whose body ends "Empty for now.":
 
 `server/docs/` · `server/specs/` · `client/docs/` · `client/specs/` ·
-`e2e/docs/` · `reviewer-core/docs/` · `reviewer-core/specs/`
+`e2e/docs/` · `reviewer-core/docs/` · `reviewer-core/specs/` · `mcp/specs/`
 
 Every package `CLAUDE.md` already routes to them under *Use when* — **the link exists and
 currently points at nothing.** Writing the first real file into one of these therefore wires
@@ -53,9 +53,15 @@ it up automatically, and **obliges you to update that `docs/README.md`**: index 
 and delete the "Empty for now." line. A stub left saying "empty" while holding a file is
 worse than either state.
 
-Note `client/specs/` also holds two large **untracked** design HTML files locally — describe
-it as "stub README, plus locally-untracked design HTML" rather than asserting either state,
-because a fresh clone sees something different.
+Note `client/specs/` also holds two large **committed** design HTML bundles (~1.8 MB each,
+tracked since `74ddb66`) — describe it as "stub README, plus the design bundles" rather
+than as empty. They are a bundled React app: they are looked at in a browser, never read
+as text.
+
+**The `specs/` stubs are not yours to fill.** `<package>/specs/<module>/NN-<slug>.md` is
+owned by `specreator` via the `/spec` command, and a hook blocks non-`.md` writes there. If
+your material is acceptance criteria or feature requirements, hand it to `/spec` instead of
+writing it.
 
 ### Real curated content — read before writing, never duplicate
 
@@ -75,7 +81,8 @@ because a fresh clone sees something different.
 | Material | Destination |
 |---|---|
 | Feature deep-dive, pipeline walkthrough, design note | `<package>/docs/<topic>.md` + index it in that `docs/README.md` |
-| Acceptance criteria, feature spec | `<package>/specs/<feature>.md` |
+| Acceptance criteria, feature spec | **not yours** — `<package>/specs/<module>/NN-<slug>.md`, written by `specreator` via `/spec` |
+| Implementation plan | **not yours** — `docs/plans/<feature>.md`, written by `/plan` |
 | Cross-package or repo-wide topic | `docs/<topic>.md` — note **`docs/` has no `README.md`**; a new top-level file should bring one |
 | Investigation, plan write-up, experiment log | `docs/research/` |
 | Reviewer prompt guidance | `docs/agent-prompts/` |

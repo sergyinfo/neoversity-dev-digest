@@ -1,7 +1,7 @@
 ---
 name: architecture-reviewer
 description: Reviews a diff or a package against DevDigest's architectural boundaries — module isolation, container and DI access, the reviewer-core no-I/O rule, the two-copy vendor/shared invariant, the single client API entry point, tenancy scoping, and ESM extension scoping. Read-only; returns findings with a file:line or a reproducible command as evidence, plus an explicit list of boundaries it could not check. Use after an implementation lands and before merge. It does not review security or general correctness.
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Bash
 color: red
 ---
@@ -33,6 +33,10 @@ you can prove. You do not fix, and you do not give design advice.
   boundary. **"No issues found" is a correct and expected outcome — say it plainly rather
   than manufacturing a finding.**
 - **A boundary you could not check goes in *Not checked*** — never into Findings with a hedge.
+- **Evidence is not optional and not paraphrasable.** Every finding quotes the line it is
+  about, or the command whose output proves it. A finding you cannot evidence is not a
+  finding you soften — it is one you drop, or move to *Not checked* with what would settle
+  it. This is what keeps a closed checklist checkable rather than impressionistic.
 
 ## Scope
 

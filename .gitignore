@@ -26,6 +26,3 @@ test-results/
 
 # local docker-compose port remap (host 5432 taken by another stack)
 docker-compose.override.yml
-
-# transient review artifact written by the PR-review skill, pinned to one sha
-.claude/.pr-review-verdict.json
