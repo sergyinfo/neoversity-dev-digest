@@ -1,15 +1,37 @@
 {
+  "title": "Why & Risk",
   "block": {
     "intent": "Intent",
     "blast": "Blast radius",
     "risks": "Risks",
-    "history": "PR history"
+    "history": "PR history",
+    "what": "What",
+    "why": "Why"
   },
+  "riskLevel": {
+    "label": "Risk level",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low"
+  },
+  "reviewFocus": "Review focus",
+  "noFocus": "Nothing specific flagged to review first.",
   "noRisks": "No notable risks flagged.",
   "noHistory": "No prior PRs overlap these files.",
   "overlap": "{count} overlap",
+  "generate": "Generate brief",
+  "regenerate": "Regenerate",
+  "outOfDate": {
+    "label": "May be out of date",
+    "moved": "{inputs} changed since this brief was generated."
+  },
+  "fileCapped": "Only the first {count} changed files were sent to the model.",
+  "impactUnknown": "Impact is unknown — this repository is not indexed.",
+  "partialCaveat": "Based on a partial index, so some impact may be missing.",
+  "notInDiff": "{count} reference(s) dropped — not in this PR's changed files.",
+  "loadFailed": "Could not load the brief.",
   "unavailable": "Brief not available yet.",
-  "unavailableHint": "Run a review or open the PR to compute it.",
+  "unavailableHint": "Generate a brief to see what this PR changes, why, and what to review first.",
   "why": {
     "title": "git-why",
     "blame": "blame",
