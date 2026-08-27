@@ -265,6 +265,7 @@ export default function PRDetailPage() {
             // The detail payload carries the intent, so a refetch (e.g. after a
             // recompute) shows the skeleton rather than the previous intent.
             intentLoading={detailLoading}
+            onOpenFile={openFileFromBrief}
           />
         )}
 
