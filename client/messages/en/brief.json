@@ -29,6 +29,7 @@
   "fileCapped": "Only the first {count} changed files were sent to the model.",
   "impactUnknown": "Impact is unknown — this repository is not indexed.",
   "partialCaveat": "Based on a partial index, so some impact may be missing.",
+  "impactUnrecorded": "This brief does not record which inputs it read, so its impact coverage is unknown.",
   "notInDiff": "{count} reference(s) dropped — not in this PR's changed files.",
   "loadFailed": "Could not load the brief.",
   "unavailable": "Brief not available yet.",

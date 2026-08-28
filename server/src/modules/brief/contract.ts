@@ -168,6 +168,44 @@ export const SkippedSource = z.object({
 export type SkippedSource = z.infer<typeof SkippedSource>;
 
 /**
+ * The blast map's state AT ASSEMBLY TIME — how good the impact input the model
+ * was actually given was, not what the map says now.
+ *
+ *  - `ok`       — the index was complete; the map was the whole story.
+ *  - `partial`  — the index skipped files, so a caller may be missing and a
+ *                 risk may therefore be UNDERSTATED. Spec §6 requires the card
+ *                 to say so; `inputs_used` cannot, because it records `blast`
+ *                 identically for `ok` and `partial`.
+ *  - `degraded` — no usable map reached the model, whether because the index
+ *                 was unusable or because no map could be built at all. The
+ *                 assemble path already collapses those two (it hands the
+ *                 assembler `null` for both), so the record does the same.
+ *
+ * The vocabulary is `blast/contract.ts`'s `BlastState`, restated rather than
+ * imported on purpose: this value is written into `pr_brief.provenance` and
+ * read back long afterwards, so it has to keep meaning what it meant when it
+ * was stored even if the live blast module's vocabulary moves. Stored data owns
+ * its own enum.
+ */
+export const BriefBlastState = z.enum(['ok', 'partial', 'degraded']);
+export type BriefBlastState = z.infer<typeof BriefBlastState>;
+
+/**
+ * How much of the changed-file list reached the model.
+ *
+ * REQ-5 caps the list at `MAX_FILES_LISTED` and the budget loop can lower it
+ * further, so `listed < total` is the state spec §6 names: "a risk in file 61
+ * can never be named, and the card says the file list was capped". `total` is
+ * the same denominator the prompt's "…and N more changed file(s)" line uses, so
+ * the caveat and what the model was told cannot disagree.
+ */
+export const ChangedFileCoverage = z.object({
+  listed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+export type ChangedFileCoverage = z.infer<typeof ChangedFileCoverage>;
+
+/**
  * REQ-15's per-assembly record, stored in `pr_brief.provenance`.
  *
  * SAFETY CONTRACT, in the spirit of `modules/reviews/prompt-log.ts:6-21`:
@@ -197,6 +235,19 @@ export const BriefProvenance = z.object({
   discarded_refs: z.number().int().nonnegative(),
   /** The resolved feature model that produced the brief. */
   model: z.string().nullable(),
+  /**
+   * The blast map's state at assembly time, and how much of the changed-file
+   * list reached the model — the two things `inputs_used` cannot say, because
+   * membership records THAT a source contributed and never how completely.
+   *
+   * **Both are `.optional()`, and both must stay that way.** A required field
+   * here makes every `pr_brief` row written before it unparseable, and an
+   * unparseable provenance is served as "nothing is known about this brief" —
+   * precisely the failure this pair exists to fix. Absent therefore means NOT
+   * RECORDED: never `ok`, and never "nothing was capped".
+   */
+  blast_state: BriefBlastState.optional(),
+  changed_files: ChangedFileCoverage.optional(),
 });
 export type BriefProvenance = z.infer<typeof BriefProvenance>;
 
@@ -213,10 +264,34 @@ export type BriefProvenance = z.infer<typeof BriefProvenance>;
 export const BriefResponse = ModelBrief.extend({
   /** Both halves; only `local` is recomputed on the read path (D-1a). */
   state_fingerprint: BriefFingerprint,
-  inputs_used: z.array(BriefInput),
+  /**
+   * Which of the five sources contributed — or `null` when the stored
+   * provenance could not be read at all.
+   *
+   * Nullable rather than an empty array, because those are different facts:
+   * `[]` says nothing contributed, `null` says we do not know what this brief
+   * used. §10's field table asks the consumer to "render the brief unattributed
+   * and say provenance is unavailable", which is only implementable if absence
+   * is representable. The key is always present; only its value may be null.
+   */
+  inputs_used: z.array(BriefInput).nullable(),
   references_used: z.array(z.string()),
   references_skipped: z.array(SkippedSource),
   discarded_refs: z.number().int().nonnegative(),
+  /**
+   * How complete the two inputs the model can be wrong about were.
+   *
+   * `blast_state: null` is NOT `degraded`. Three states reach this pair and
+   * they are three different sentences: a `degraded` map means "we know this
+   * repository has no usable index", `partial` means "the map is real but may
+   * be missing a caller", and `null` means "this brief does not record what its
+   * impact input was" — a row written before the field, or a provenance that
+   * would not parse. A consumer must not turn the third into a claim about the
+   * index; that collapse is what F-7 is.
+   */
+  blast_state: BriefBlastState.nullable(),
+  /** `null` when not recorded — never "nothing was capped". */
+  changed_files: ChangedFileCoverage.nullable(),
   /** Null → the card shows "—", via the shipped `formatCost`; never "$0.00". */
   model: z.string().nullable(),
   cost_usd: z.number().nullable(),

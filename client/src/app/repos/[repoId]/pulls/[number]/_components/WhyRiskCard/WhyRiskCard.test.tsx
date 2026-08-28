@@ -63,6 +63,10 @@ const BRIEF: BriefResponse = {
   references_used: [],
   references_skipped: [],
   discarded_refs: 0,
+  // A complete index and every changed file listed: the baseline against which
+  // each caveat below has to be ABSENT.
+  blast_state: "ok",
+  changed_files: { listed: 2, total: 2 },
   model: "deepseek/deepseek-v4-flash",
   cost_usd: 0.0013,
   tokens_in: 4821,
@@ -270,6 +274,86 @@ describe("WhyRiskCard — focus that grounding discarded", () => {
     // Not one file reference is offered: every mono link in this card is a
     // file, so an invented "read this instead" would show up here.
     expect(container.querySelectorAll("button.mono")).toHaveLength(0);
+  });
+});
+
+/**
+ * The input-quality caveats (spec §6).
+ *
+ * These are the states in which the brief is not wrong but is INCOMPLETE, and
+ * the card is the only place a reviewer can find that out. Each assertion has
+ * a negative twin: a caveat that renders in every state says nothing.
+ */
+describe("WhyRiskCard — how good the inputs were", () => {
+  it("says a partial index may understate the risks", () => {
+    renderCard({ data: { ...BRIEF, blast_state: "partial" } });
+
+    expect(
+      screen.getByText("Based on a partial index, so some impact may be missing."),
+    ).toBeInTheDocument();
+    // …and it does NOT also claim the repository is unindexed: `partial` means
+    // the map is real, just incomplete.
+    expect(screen.queryByText(/this repository is not indexed/)).toBeNull();
+  });
+
+  it("says nothing about the index when it was complete", () => {
+    renderCard({ data: { ...BRIEF, blast_state: "ok" } });
+
+    expect(screen.queryByText(/partial index/)).toBeNull();
+    expect(screen.queryByText(/this repository is not indexed/)).toBeNull();
+    expect(screen.queryByText(/does not record which inputs/)).toBeNull();
+  });
+
+  it("says the impact is unknown for a degraded map, and never that there is none", () => {
+    const { container } = renderCard({ data: { ...BRIEF, blast_state: "degraded" } });
+
+    expect(
+      screen.getByText("Impact is unknown — this repository is not indexed."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/partial index/)).toBeNull();
+    expect(container.textContent).not.toMatch(/nothing is affected|no impact/i);
+  });
+
+  /**
+   * F-7: three distinct states used to reach one banner. An unreadable or
+   * absent provenance is a "we do not know what this brief used", not a "we
+   * know it had no impact map" — and the card must not turn the first into the
+   * second, which is a positive claim about a repository it knows nothing
+   * about.
+   */
+  it("does not claim the repository is unindexed when the brief records nothing", () => {
+    renderCard({
+      data: { ...BRIEF, inputs_used: null, blast_state: null, changed_files: null },
+    });
+
+    expect(
+      screen.getByText(
+        "This brief does not record which inputs it read, so its impact coverage is unknown.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/this repository is not indexed/)).toBeNull();
+    expect(screen.queryByText(/partial index/)).toBeNull();
+    // The brief itself is still fully readable — an unknown provenance is not
+    // a reason to hide the content.
+    expect(screen.getByText(BRIEF.what)).toBeInTheDocument();
+    expect(screen.getByText("Legitimate clients may be throttled")).toBeInTheDocument();
+  });
+
+  it("says the file list was capped when the model saw only some of the changed files", () => {
+    renderCard({ data: { ...BRIEF, changed_files: { listed: 60, total: 312 } } });
+
+    expect(
+      screen.getByText("Only the first 60 changed files were sent to the model."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not mention a cap when every changed file was sent, or when coverage is unrecorded", () => {
+    renderCard({ data: { ...BRIEF, changed_files: { listed: 9, total: 9 } } });
+    expect(screen.queryByText(/were sent to the model/)).toBeNull();
+
+    cleanup();
+    renderCard({ data: { ...BRIEF, changed_files: null } });
+    expect(screen.queryByText(/were sent to the model/)).toBeNull();
   });
 });
 

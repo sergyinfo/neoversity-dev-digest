@@ -108,6 +108,7 @@ async function assemble() {
 
   const record = buildProvenance({
     assembly,
+    blast_state: BLAST.state,
     references_skipped: skipped,
     discarded_refs: 2,
     result: {
@@ -176,6 +177,44 @@ describe('AC-32 — the record carries no input content', () => {
     expect(record.discarded_refs).toBe(2);
     expect(record.model).toBe('openai/gpt-4.1');
   });
+
+  /**
+   * F-6: `inputs_used` records THAT the map contributed and can never say how
+   * completely, so the record carries the state it was in and the changed-file
+   * coverage separately. Without them a `partial` index is indistinguishable
+   * from a complete one in everything downstream of this record.
+   */
+  it('records how COMPLETE the impact map and the file list were, not just that they were used', async () => {
+    const { record, assembly } = await assemble();
+
+    expect(record.inputs_used).toContain('blast');
+    expect(record.blast_state).toBe('ok');
+    expect(record.changed_files).toEqual({ listed: assembly.files_listed, total: 2 });
+
+    // Still numbers and a fixed label: the safety contract is untouched.
+    expect(JSON.stringify(record.changed_files)).not.toMatch(/[a-z]+\.ts/);
+  });
+
+  it('records a partial map as partial, where inputs_used cannot tell the two apart', async () => {
+    const { assembly } = await assemble();
+
+    const ok = buildProvenance({
+      assembly,
+      blast_state: 'ok',
+      references_skipped: [],
+      discarded_refs: 0,
+    });
+    const partial = buildProvenance({
+      assembly,
+      blast_state: 'partial',
+      references_skipped: [],
+      discarded_refs: 0,
+    });
+
+    expect(ok.inputs_used).toEqual(partial.inputs_used);
+    expect(ok.blast_state).toBe('ok');
+    expect(partial.blast_state).toBe('partial');
+  });
 });
 
 describe('AC-33 — an https reference with external fetching disabled', () => {
@@ -211,11 +250,13 @@ describe('buildProvenance — normalisation', () => {
     references_used: ['docs/a.md', 'docs/a.md'],
     dropped_items: [],
     files_listed: 1,
+    files_total: 1,
   };
 
   it('dedupes and orders inputs and references so two records compare byte for byte', () => {
     const record = buildProvenance({
       assembly: emptyAssembly,
+      blast_state: 'ok',
       references_skipped: [],
       discarded_refs: 0,
     });
@@ -227,6 +268,7 @@ describe('buildProvenance — normalisation', () => {
   it('reports absent provider numbers as null rather than inventing zeros', () => {
     const record = buildProvenance({
       assembly: emptyAssembly,
+      blast_state: 'ok',
       references_skipped: [],
       discarded_refs: 0,
       result: null,
@@ -240,6 +282,7 @@ describe('buildProvenance — normalisation', () => {
   it('keeps a genuine zero cost distinguishable from an unknown one', () => {
     const priced = buildProvenance({
       assembly: emptyAssembly,
+      blast_state: 'ok',
       references_skipped: [],
       discarded_refs: 0,
       result: { costUsd: 0, tokensIn: 0, tokensOut: 0, model: 'm' },
@@ -251,6 +294,7 @@ describe('buildProvenance — normalisation', () => {
   it('clamps a source long enough to be a payload instead of recording it', () => {
     const record = buildProvenance({
       assembly: emptyAssembly,
+      blast_state: 'ok',
       references_skipped: [{ source: 'x'.repeat(5_000), reason: 'y'.repeat(5_000) }],
       discarded_refs: 0,
     });

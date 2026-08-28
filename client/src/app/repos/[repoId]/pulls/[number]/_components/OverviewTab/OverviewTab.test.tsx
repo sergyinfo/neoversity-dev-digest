@@ -58,6 +58,8 @@ const BRIEF: BriefResponse = {
   references_used: [],
   references_skipped: [],
   discarded_refs: 0,
+  blast_state: "ok",
+  changed_files: { listed: 2, total: 2 },
   model: "deepseek/deepseek-v4-flash",
   cost_usd: 0.002,
   tokens_in: 100,

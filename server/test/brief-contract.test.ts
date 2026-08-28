@@ -58,6 +58,8 @@ const provenance: BriefProvenance = {
   cost_usd: 0.0134,
   discarded_refs: 2,
   model: 'gpt-4.1',
+  blast_state: 'partial',
+  changed_files: { listed: 60, total: 312 },
 };
 
 const response: BriefResponse = {
@@ -67,6 +69,8 @@ const response: BriefResponse = {
   references_used: provenance.references_used,
   references_skipped: provenance.references_skipped,
   discarded_refs: 2,
+  blast_state: provenance.blast_state ?? null,
+  changed_files: provenance.changed_files ?? null,
   model: 'gpt-4.1',
   cost_usd: 0.0134,
   tokens_in: 7550,
@@ -131,6 +135,53 @@ describe('brief contract — fixtures parse', () => {
   it('BriefProvenance parses a full record', () => {
     const r = BriefProvenance.safeParse(provenance);
     expect(r.success).toBe(true);
+  });
+
+  /**
+   * The whole point of `blast_state` / `changed_files` being optional: a
+   * `pr_brief` row written before they existed must keep parsing. A required
+   * field would make every stored row unreadable, which is served as "nothing
+   * is known about this brief" — the F-7 failure, recreated by the F-6 fix.
+   */
+  it('BriefProvenance still parses a record written before blast_state and changed_files', () => {
+    const legacy: Record<string, unknown> = { ...provenance };
+    delete legacy.blast_state;
+    delete legacy.changed_files;
+
+    const r = BriefProvenance.safeParse(legacy);
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.blast_state).toBeUndefined();
+    expect(r.success && r.data.changed_files).toBeUndefined();
+  });
+
+  it('BriefProvenance rejects a blast_state outside the three-state vocabulary', () => {
+    expect(BriefProvenance.safeParse({ ...provenance, blast_state: 'unknown' }).success).toBe(
+      false,
+    );
+    expect(BriefProvenance.safeParse({ ...provenance, blast_state: 'full' }).success).toBe(false);
+  });
+
+  it('BriefResponse distinguishes an unrecorded impact input from a degraded one', () => {
+    // Both are "no impact map to lean on", and they are NOT the same claim:
+    // `degraded` knows the repository has no usable index, `null` knows
+    // nothing at all. Only the first may be rendered as a fact about the index.
+    const unrecorded = BriefResponse.parse({
+      ...response,
+      inputs_used: null,
+      blast_state: null,
+      changed_files: null,
+    });
+    expect(unrecorded.blast_state).toBeNull();
+    expect(unrecorded.inputs_used).toBeNull();
+
+    const degraded = BriefResponse.parse({ ...response, blast_state: 'degraded' });
+    expect(degraded.blast_state).toBe('degraded');
+
+    // …and the key itself is still required: a response that simply omits it
+    // must fail rather than arrive as `undefined` at the card.
+    const missing: Record<string, unknown> = { ...response };
+    delete missing.blast_state;
+    expect(BriefResponse.safeParse(missing).success).toBe(false);
   });
 
   it('BriefProvenance accepts null cost and null token counts', () => {

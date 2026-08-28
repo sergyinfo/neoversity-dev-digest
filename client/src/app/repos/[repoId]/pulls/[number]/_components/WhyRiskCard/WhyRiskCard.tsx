@@ -105,7 +105,34 @@ export function WhyRiskCard({ prId, onOpenFile }: WhyRiskCardProps) {
   const risks = data.risks.slice(0, MAX_RISKS);
   const focus = data.review_focus.slice(0, MAX_FOCUS);
   const movedInputs = data.moved_inputs.map((i) => MOVED_INPUT_LABEL[i]).join(", ");
-  const impactUnknown = !data.inputs_used.includes("blast");
+
+  /**
+   * One line about how good the impact input was, and never more than one.
+   *
+   * It is driven by `blast_state` rather than by `inputs_used` membership,
+   * because membership records THAT the map contributed and cannot say how
+   * completely: a `partial` index — the one state where a missing caller means
+   * a risk may be understated — was indistinguishable from a complete one, and
+   * an unreadable provenance (served as an empty `inputs_used`) was rendered as
+   * a positive claim that the repository is not indexed.
+   *
+   * `null` is its own state and gets its own sentence: we do not know what this
+   * brief read, which is not the same as knowing it read nothing.
+   */
+  const impactCaveatKey =
+    data.blast_state === null
+      ? "impactUnrecorded"
+      : data.blast_state === "partial"
+        ? "partialCaveat"
+        : data.blast_state === "degraded"
+          ? "impactUnknown"
+          : null;
+
+  // Spec §6, the 300-file row: files beyond the cap were never seen by the
+  // model, so a risk living in one of them could not have been named. Silence
+  // here would let the brief read as complete. Absent coverage says nothing.
+  const coverage = data.changed_files;
+  const fileCapped = coverage !== null && coverage.listed < coverage.total;
 
   return (
     <Card>
@@ -149,10 +176,16 @@ export function WhyRiskCard({ prId, onOpenFile }: WhyRiskCardProps) {
             ))}
           </ul>
         )}
-        {impactUnknown && (
+        {impactCaveatKey && (
           <div style={s.caveat}>
             <Icon.AlertTriangle size={13} />
-            <span>{t("impactUnknown")}</span>
+            <span>{t(impactCaveatKey)}</span>
+          </div>
+        )}
+        {fileCapped && (
+          <div style={s.caveat}>
+            <Icon.Filter size={13} />
+            <span>{t("fileCapped", { count: coverage.listed })}</span>
           </div>
         )}
       </div>

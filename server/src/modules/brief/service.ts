@@ -69,6 +69,7 @@ import {
   BriefFingerprint,
   BriefProvenance,
   ModelBrief,
+  type BriefBlastState,
   type BriefResponse,
   type MovedInput,
 } from './contract.js';
@@ -207,6 +208,12 @@ export class BriefService {
     }
 
     // ---- Assemble, measure, and make the one call -------------------------
+    // What the model was actually given, in the vocabulary the record stores:
+    // the assembler is handed `null` both for a degraded map and for no map at
+    // all, so `degraded` covers both here for the same reason.
+    const blastState: BriefBlastState =
+      state.blast && !state.blastDegraded ? state.blast.state : 'degraded';
+
     const assembly = assembleBriefInput({
       intent: state.intent ? await this.intentDocument(workspaceId, prId) : null,
       // A degraded map contributes nothing and must NOT be recorded as an input
@@ -280,6 +287,7 @@ export class BriefService {
 
     const provenance = buildProvenance({
       assembly,
+      blast_state: blastState,
       references_skipped: skipped,
       discarded_refs: grounded.discarded,
       result: {
@@ -325,6 +333,10 @@ export class BriefService {
       references_used: provenance.references_used,
       references_skipped: provenance.references_skipped,
       discarded_refs: provenance.discarded_refs,
+      // Read back off the record that was just stored, so the assemble response
+      // and the next read of the same row cannot describe the input differently.
+      blast_state: provenance.blast_state ?? null,
+      changed_files: provenance.changed_files ?? null,
       model: result.model,
       cost_usd: result.costUsd,
       tokens_in: result.tokensIn,
@@ -545,15 +557,30 @@ export class BriefService {
       ? BriefFingerprint.parse(stored)
       : { local: '', remote: '' };
 
+    // A provenance that is null (the column is nullable, and a row written
+    // before the feature has one) or whose shape has drifted is UNKNOWN, not
+    // empty. Serving `inputs_used: []` for it told the card "no source
+    // contributed", which it then read as "this repository is not indexed" over
+    // a brief assembled from a healthy map (F-7). `null` says what is true: we
+    // cannot tell what this brief used.
     const provenance = BriefProvenance.safeParse(row.provenance);
+    const p = provenance.success ? provenance.data : null;
 
     return {
       ...document,
       state_fingerprint,
-      inputs_used: provenance.success ? provenance.data.inputs_used : [],
-      references_used: provenance.success ? provenance.data.references_used : [],
-      references_skipped: provenance.success ? provenance.data.references_skipped : [],
-      discarded_refs: provenance.success ? provenance.data.discarded_refs : 0,
+      inputs_used: p ? p.inputs_used : null,
+      // The three list-shaped fields stay empty rather than nullable: §10 says
+      // a consumer must show nothing for them and must not read absence as
+      // "nothing was skipped", and `inputs_used === null` is the marker that
+      // says which of the two an empty list is.
+      references_used: p?.references_used ?? [],
+      references_skipped: p?.references_skipped ?? [],
+      discarded_refs: p?.discarded_refs ?? 0,
+      // Absent on a row stored before these were recorded, and on an unreadable
+      // one. Both are "not recorded" — never `degraded`, and never `ok`.
+      blast_state: p?.blast_state ?? null,
+      changed_files: p?.changed_files ?? null,
       model: row.model,
       cost_usd: row.costUsd,
       tokens_in: row.tokensIn,

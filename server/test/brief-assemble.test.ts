@@ -243,6 +243,36 @@ describe('AC-10 — 300 changed files', () => {
     expect(assembled.user).toContain('src/generated/file-059.ts');
     expect(assembled.user).not.toContain('src/generated/file-060.ts');
   });
+
+  /**
+   * Spec §6: "a risk in file 61 can never be named, and the card says the file
+   * list was capped". `files_listed` alone cannot say that — 60 of 60 and 60 of
+   * 300 are the same number — so the assembler returns the denominator it
+   * already computed for its own "…and N more" line, rather than leaving the
+   * caller to derive a second one that could disagree with the prompt.
+   */
+  it('returns the denominator the prompt used, so the capped state is visible downstream', () => {
+    expect(assembled.files_listed).toBe(MAX_FILES_LISTED);
+    expect(assembled.files_total).toBe(300);
+    expect(assembled.files_total - assembled.files_listed).toBe(240);
+  });
+
+  it('reports no cap when every changed file was listed', () => {
+    const all = assembleBriefInput(input());
+    expect(all.files_listed).toBe(FILES.length);
+    expect(all.files_total).toBe(FILES.length);
+  });
+
+  it('never reports fewer files than it listed, even on a stale files_count', () => {
+    // `pull_requests.files_count` is refreshed by `GET /pulls/:id` and the
+    // stored `pr_files` rows are not always the same generation, so a
+    // denominator smaller than what was listed is reachable — and would make
+    // the coverage read as negative.
+    const stale = assembleBriefInput(
+      input({ stats: { additions: 6, deletions: 1, files_count: 1 } }),
+    );
+    expect(stale.files_total).toBe(stale.files_listed);
+  });
 });
 
 describe('REQ-5 — whole items are dropped in D-8’s order', () => {

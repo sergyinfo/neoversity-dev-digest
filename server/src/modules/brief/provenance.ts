@@ -35,7 +35,12 @@
  * identifiers, already extracted by the assembler — so there is no code path
  * here that can reach a document's `.content` even by accident.
  */
-import { BriefProvenance, type BriefInput, type SkippedSource } from './contract.js';
+import {
+  BriefProvenance,
+  type BriefBlastState,
+  type BriefInput,
+  type SkippedSource,
+} from './contract.js';
 import type { AssembledBriefInput } from './assemble.js';
 
 /**
@@ -67,6 +72,16 @@ export interface ProvenanceInput {
   references_skipped: readonly SkippedSource[];
   /** How many model references REQ-6 grounding discarded. */
   discarded_refs: number;
+  /**
+   * The blast map's state at assembly time.
+   *
+   * Required HERE and optional in the schema, deliberately: every record this
+   * function writes carries it, so no caller can quietly omit it, while a row
+   * written before the field still parses on the way back out. It is not a
+   * second copy of the live blast state — it is what the model was given, which
+   * is the only version a stored brief can be judged against.
+   */
+  blast_state: BriefBlastState;
   /** The provider's own numbers. Null when there was no call, or none reported. */
   result?: {
     model?: string | null;
@@ -132,5 +147,11 @@ export function buildProvenance(input: ProvenanceInput): BriefProvenance {
         : null,
     discarded_refs: Math.max(0, Math.round(input.discarded_refs)),
     model: input.result?.model ? clamp(input.result.model, MAX_SOURCE_CHARS) : null,
+    // How COMPLETE the two inputs the brief can be silently wrong about were.
+    // `inputs_used` says a source contributed; only these say how much of it
+    // did, which is what spec §6's two caveats are rendered from. Both are
+    // numbers and a fixed label, so the safety contract above is untouched.
+    blast_state: input.blast_state,
+    changed_files: { listed: assembly.files_listed, total: assembly.files_total },
   });
 }

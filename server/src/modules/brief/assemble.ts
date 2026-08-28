@@ -113,6 +113,15 @@ export interface AssembledBriefInput {
   dropped_items: SkippedSource[];
   /** How many changed-file entries were listed. */
   files_listed: number;
+  /**
+   * How many the PR has — the denominator of `files_listed`.
+   *
+   * The SAME figure `renderChangedFiles` uses for its "…and N more changed
+   * file(s), not listed" line, returned rather than recomputed by the caller so
+   * the card's capped-file caveat can never disagree with what the model was
+   * told. `files_listed < files_total` is the capped state of spec §6.
+   */
+  files_total: number;
 }
 
 /**
@@ -390,5 +399,9 @@ export function assembleBriefInput(input: AssembleInput): AssembledBriefInput {
     references_used: w.references.map((r) => r.source),
     dropped_items: dropped,
     files_listed: w.filesListed,
+    // `renderChangedFiles`'s own denominator, floored at what was actually
+    // listed so a `files_count` that lags the stored rows can never make the
+    // coverage read as "more listed than exist".
+    files_total: Math.max(input.stats.files_count || totalFiles, w.filesListed),
   };
 }

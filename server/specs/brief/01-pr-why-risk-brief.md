@@ -2,7 +2,7 @@
 module: server/brief
 spec: 01-pr-why-risk-brief
 status: approved       # draft → approved (set by a human) → superseded (set by /spec)
-updated: 2026-08-27
+updated: 2026-08-28
 supersedes:
 lesson: L05
 issue:
@@ -132,6 +132,13 @@ The DevDigest studio user reviewing a pull request in a single local workspace.
   digests are in the stored fingerprint but are not recomputed on the read path, because doing so
   would mean a live GitHub call and a set of clone reads on every PR open — the work D-14 forbids
   and §7's 300 ms read budget cannot hold. They are compared at the next assembly instead (D-1a).
+- **A stored size cap on `pr_files.patch`, and any hard refusal to brief an over-budget PR.**
+  The patch is stored verbatim as GitHub returns it (`adapters/github/octokit.ts:110` →
+  `modules/pulls/routes.ts:265-273`; `modules/reviews/service.ts:135-141`), and REQ-4a
+  deliberately sends an over-budget single-file input rather than refusing to brief that PR
+  (D-16). Capping the stored patch would change what the reviewer, the smart diff and the review
+  path all read, which is a far wider change than this spec owns; refusing the assembly would
+  reverse REQ-5. Both are candidates for a later numbered spec, not corrections to this one.
 - Posting the brief to GitHub, or including it in a review comment.
 - Editing a brief by hand, or accepting/dismissing individual risks.
 - Any change to `reviewer-core`, which this feature never calls.
@@ -148,8 +155,9 @@ Requirements are written in EARS; the `Pattern` column names which one. One patt
 | REQ-1 | Ubiquitous | THE SYSTEM SHALL expose, for a pull request, a brief carrying a `what` statement, a `why` statement, one `risk_level` drawn from `high`/`medium`/`low`, a list of risks, and an ordered review-focus list. | Requirements 2 and 5 — the agreed shape. | absent — the shipped `PrBrief` composes `{intent, blast, risks, history}` (`contracts/brief.ts:143-149`); `grep -rn "risk_level\|review_focus"` over both vendor trees returns nothing |
 | REQ-2 | Event-driven | WHEN the user explicitly requests a brief assembly, THE SYSTEM SHALL build the model input from exactly five sources — the stored intent, the blast map, the PR's diff statistics and changed-file list, the linked issue, and the specification and plan documents referenced by the PR body and resolved at assembly time — and SHALL issue exactly one structured model call. | Requirements 1 and 2, with D-13's source and D-14's trigger. "Exactly one" is the bar blast already holds itself to (`blast/summary.ts:9-13`). | absent — no `brief` module is registered (`modules/index.ts:29-43`), though `:26` names `brief` as a planned lesson module |
 | REQ-3 | Ubiquitous | THE SYSTEM SHALL exclude every diff hunk **body** from the assembled model input; the input may carry changed-file paths, per-file addition and deletion counts, and hunk header ranges, and SHALL carry no added, removed or context source line. | Requirement 1's hard constraint. Enforceable and checkable, not a note — AC-6. | absent for the brief; the identical guarantee already holds for intent (`intent/classifier.ts:135-146`, documented at `server/docs/intent-layer.md:109-114`) |
-| REQ-4 | Ubiquitous | THE SYSTEM SHALL keep the assembled model input at or below **8 000 estimated tokens**, where an estimated token is one `cl100k_base` token counted by the server's existing tokenizer over the concatenation of the system message and the user message, with `ceil(chars / 4)` as the fallback when the encoder fails to load. | The assignment's budget, with its unit fixed. Consistent with the approved sibling spec (D-2). | absent |
-| REQ-5 | Event-driven | WHEN the assembled input exceeds 8 000 estimated tokens, THE SYSTEM SHALL drop **whole** items from the end of the fixed priority order — resolved reference documents, then the linked issue, then blast-map symbols beyond the highest-ranked, then changed files beyond the first 60 — and SHALL complete the assembly rather than failing it. | D-8. Truncating a document mid-sentence can cut a "must not" and invert it; the house precedent is omit-don't-throw (`server/CLAUDE.md`). | absent |
+| REQ-4 | Ubiquitous | THE SYSTEM SHALL treat **8 000 estimated tokens** as the input budget it drives the assembled model input toward — where an estimated token is one `cl100k_base` token counted by the server's existing tokenizer over the concatenation of the system message and the user message, with `ceil(chars / 4)` as the fallback when the encoder fails to load — and SHALL NOT issue a call whose input exceeds that budget **while any item remains droppable under REQ-5's priority order**. The one case that escapes the budget is REQ-4a. | The assignment's budget, with its unit fixed. Consistent with the approved sibling spec (D-2). Stated as a budget rather than a guarantee because the priority order has a floor it cannot drop past, and the spec must not promise what the design cannot deliver (D-16). | absent at authoring; **shipped** — the drive-down loop is `modules/brief/assemble.ts:368-375` over `constants.ts:40` (`TOKEN_BUDGET = 8_000`) |
+| REQ-4a | Unwanted | IF REQ-5's priority order has reached its floor — one changed file and the highest-ranked blast symbol — and the assembled input still exceeds 8 000 estimated tokens, THEN THE SYSTEM SHALL issue the one structured call with that over-budget input anyway, and SHALL record both the actual estimate and the fact that the drop order was exhausted. | *(appended 2026-08-28; sub-id of REQ-4, which it qualifies rather than replaces — the D-1a convention.)* The last changed file is the grounding allow-list, and dropping it would leave every model-returned reference discardable and the brief citing nothing, so the assembler floors it (`assemble.ts:307-309, 327-331`) and the loop `break`s and sends (`:368-375`). The remaining contribution is that file's re-rendered `@@` headers, one per hunk, and `pr_files.patch` carries no stored size cap — so a single file with thousands of scattered hunks can exceed the budget with nothing left to absorb it. The alternative is refusing to brief that PR at all, which REQ-5 rejects (D-16). Its residual cost is §7's *Risk — input amplification* row. | absent at authoring; **shipped and deliberate** — `assemble.ts:311-333` (`dropNext`'s two floors, with the reason in its doc comment) and `:370-371` (`break`, commented "complete anyway"); asserted as intended by `server/test/brief-assemble.test.ts:291-296` |
+| REQ-5 | Event-driven | WHEN the assembled input exceeds 8 000 estimated tokens, THE SYSTEM SHALL drop **whole** items from the end of the fixed priority order — resolved reference documents, then the linked issue, then blast-map symbols beyond the highest-ranked, then changed files beyond the first 60 and down to a floor of one file — and SHALL complete the assembly rather than failing it, **including when that floor is reached with the input still over budget** (REQ-4a). | D-8. Truncating a document mid-sentence can cut a "must not" and invert it; the house precedent is omit-don't-throw (`server/CLAUDE.md`). **This requirement is in deliberate tension with REQ-4, and the tension resolves here:** "never fail the assembly" outranks "never exceed the budget", because the floor exists to keep an allow-list the brief can cite. REQ-4a names what that costs so no reader has to discover it. | absent at authoring; **shipped** — the order and both floors are `assemble.ts:311-333`; the drive-down loop is `:368-375` |
 | REQ-6 | Unwanted | IF a model-returned risk file reference or review-focus reference is not present in the grounding allow-list, THEN THE SYSTEM SHALL discard that reference and count it, and SHALL NOT repair, fuzzy-match, or substitute it. | Requirement 3, and the course criterion "risks reference files from the blast map". Repairing a wrong path silently asserts a different claim. | absent — intent performs **no** grounding of its model output at all (`in_scope`/`out_of_scope` are free-text nouns, `intent/classifier.ts:43-56`) |
 | REQ-7 | Unwanted | IF the model reports a `risk_level` higher than the highest `severity` among the risks that survived REQ-6, THEN THE SYSTEM SHALL lower the stored `risk_level` to that highest surviving severity. | D-7. Mirrors intent's `confidence = min(model band, evidence tier)` — our code may only ever lower the model's claim (`intent/classifier.ts:120-132`). | absent |
 | REQ-8 | Ubiquitous | THE SYSTEM SHALL store with every brief a **state fingerprint** derived from the PR head sha, the stored intent's derivation timestamp and model, the blast map's `indexed_sha` and `state`, the linked issue's number, state and content digest, the source identifier and content digest of every resolved reference document that entered the input, the resolved feature-model provider and model, and the brief assembler version. | The assignment's "cached for a specific PR state" made precise. Head sha alone is provably insufficient — see D-1's four counterexamples. All ten components are stored and all ten are compared at assembly; which subset the *read* path recomputes is REQ-14's concern (D-1a). | absent — `pr_brief` has only `{pr_id, json}` (`db/schema/reviews.ts:74-79`) and cannot express a fingerprint |
@@ -161,13 +169,18 @@ Requirements are written in EARS; the `Pattern` column names which one. One patt
 | REQ-14 | State-driven | WHILE a stored brief's **locally recomputable** fingerprint components — the PR head sha, the stored intent's derivation timestamp and model, the blast map's `indexed_sha` and `state`, the resolved feature-model provider and model, and the assembler version — differ from those same components recomputed at read time, THE SYSTEM SHALL render that brief marked as out of date and name which of those inputs moved. | A cached brief that silently describes an older head is worse than none — this is the failure mode REQ-8 exists to prevent, made visible. Scoped to the locally recomputable components because recomputing the other two would mean re-resolving the linked issue and every reference document on every PR open — the work D-14 forbids and §7's 300 ms read budget cannot hold. Those two are compared at the next assembly instead (D-1a). | absent |
 | REQ-15 | Ubiquitous | THE SYSTEM SHALL record for each assembly, carrying **no input content**, which of the five sources contributed, which reference documents resolved and which were skipped and why, the estimated input token count, the model-reported input and output token counts, the cost, and the number of references discarded by REQ-6. | The assignment asks a reviewer to inspect provenance; a discard count is also the only early signal that the prompt or the model has gone wrong. | absent — the safety contract to copy is `modules/reviews/prompt-log.ts:14-21`, asserted against planted secrets by `server/test/prompt-log.test.ts` |
 
-*Patterns used: Ubiquitous ×7, Event-driven ×4, Unwanted ×3, State-driven ×1. **Optional
+*Patterns used: Ubiquitous ×7, Event-driven ×4, Unwanted ×4, State-driven ×1. **Optional
 (`WHERE …`) is unused, deliberately.** The one flag in this feature's neighbourhood,
 `INTENT_EXTERNAL_FETCH_ENABLED`, is enforced inside the `container.webFetch` getter rather than
 at any call site (`server/docs/intent-layer.md:346-350`), so a new consumer cannot opt out of it
 and there is no behaviour here that could independently fail. It is recorded as inherited
 behaviour in Out of scope, as a §6 row and as an acceptance criterion, not as a requirement this
 feature owns.*
+
+*The `Status today` column records the state of the codebase **at authoring, 2026-08-27**, and is
+left as written so the spec keeps saying what it was judged against. The two rows corrected on
+2026-08-28 — REQ-4 and REQ-4a/REQ-5 — cite the shipped code instead, because the correction is
+precisely a statement about what shipped (D-16).*
 
 ## 5. Acceptance criteria
 
@@ -179,9 +192,10 @@ feature owns.*
 | AC-4 | REQ-2 | Given a PR whose body links a repository plan under `docs/` and issue `#123` / When a brief is assembled / Then the input contains that document's text and that issue's body, and the recorded source list names all five sources. | integration |
 | AC-5 | REQ-2 | Given a PR body referencing `../../../etc/passwd`, an absolute path, or a path containing a NUL byte / When a brief is assembled / Then that reference is rejected, no such file is opened, and the assembly completes without it. | unit |
 | AC-6 | REQ-3 | Given a `pr_files.patch` containing the sentinel line `+const SENTINEL_DO_NOT_SEND = 1;` / When a brief is assembled / Then the captured model input does not contain that sentinel, and does contain that file's path and its `@@` hunk range. | unit |
-| AC-7 | REQ-4 | Given an assembled input / When it is measured / Then the recorded estimate equals the tokenizer's `cl100k_base` count of the system message concatenated with the user message, and the recorded estimate is ≤ 8 000. | unit |
+| AC-7 | REQ-4 | Given an assembled input **for which at least one item in REQ-5's priority order remained droppable** / When it is measured / Then the recorded estimate equals the tokenizer's `cl100k_base` count of the system message concatenated with the user message, and the recorded estimate is ≤ 8 000. | unit |
+| AC-7a | REQ-4a, REQ-5 | Given a PR whose **single** changed file carries enough hunks that its re-rendered `@@` headers alone exceed 8 000 estimated tokens, with no references, no linked issue and one blast symbol / When a brief is assembled / Then every droppable item is dropped, the drop order is recorded as exhausted, the recorded estimate is **above** 8 000, exactly one structured call is still issued, and no error is raised. | unit |
 | AC-8 | REQ-4 | Given a tokenizer whose encoder fails to load / When an input is measured / Then the estimate equals `ceil(chars / 4)` and the assembly still completes. | unit |
-| AC-9 | REQ-5 | Given inputs whose combined estimate exceeds 8 000 / When a brief is assembled / Then the estimate is at or under 8 000, no item appears partially, the dropped items are recorded, and the assembly succeeds. | integration |
+| AC-9 | REQ-5 | Given inputs whose combined estimate exceeds 8 000 **and at least one droppable item** / When a brief is assembled / Then the estimate is at or under 8 000, no item appears partially, the dropped items are recorded, and the assembly succeeds. | integration |
 | AC-10 | REQ-5 | Given a PR with 300 changed files / When a brief is assembled / Then at most 60 file entries appear in the input and the omission is recorded. | unit |
 | AC-11 | REQ-5 | Given resolved reference documents totalling more than the 12 KB budget / When a brief is assembled / Then whole documents are dropped in the shipped resolution order and each drop is recorded by source, never by content. | unit |
 | AC-12 | REQ-6 | Given a model returning a `review_focus` entry for `src/does-not-exist.ts` and one for a real changed file / When the brief is stored / Then only the real entry survives and the discard count is 1. | unit |
@@ -208,6 +222,9 @@ feature owns.*
 | AC-33 | Inherited (`INTENT_EXTERNAL_FETCH_ENABLED`) | Given a PR body containing an `https://` reference and the flag at its default `false` / When a brief is assembled / Then no outbound fetch of that URL occurs, the reference is recorded as skipped, and the assembly completes. | unit |
 | AC-34 | REQ-9, REQ-2 | Given the whole `09-pr-brief` e2e flow / When it runs / Then no LLM call is made at any point, because the flow never presses generate. | e2e flow |
 
+*AC-7a is a sub-id appended 2026-08-28 rather than an AC-35, so the existing numbering — cited by
+`docs/plans/pr-why-risk-brief.md` and by §15 — is not disturbed. It follows the D-1a convention.*
+
 ## 6. States & corner cases
 
 | Dimension | Trigger | Expected behaviour | Source |
@@ -220,6 +237,7 @@ feature owns.*
 | Cardinality — many | PR with 300+ changed files | First 60 file entries enter the input (REQ-5); a risk in file 61 can never be named, and the card says the file list was capped | intent's `MAX_FILES_LISTED = 60` (`intent/constants.ts:26`) |
 | Cardinality — many | PR body links forty documents | The shipped per-kind caps (5 repo files / 5 GitHub / 3 URLs) apply unchanged, so forty links cannot crowd out the one plan committed in the repo | `docs/intent-layer.md:196-198` |
 | Cardinality — many | Model returns 30 review-focus entries | Store and render at most 8, in the model's order; the design shows 4 | screenshot 5 — "REVIEW FOCUS — READ THESE FIRST 4" |
+| **Cardinality — more than fits** | **One changed file carrying thousands of small scattered hunks — e.g. every fourth line of a large file edited — so that file's re-rendered `@@` headers alone exceed 8 000 estimated tokens** | **The drop order runs to its floor and cannot reach the last file: references, the linked issue and every symbol beyond the highest-ranked go first, and the file list stops at one. The call is then issued over budget (REQ-4a), the actual estimate and the exhausted order are recorded, and if the provider rejects the input for exceeding its context window that surfaces as a 502 with no stored brief replaced. The system never silently truncates the hunk list and never refuses the PR.** Nothing else can absorb the excess: every other input is separately capped (issue 2 000 chars, references 12 KB, symbols 12, files 60) | `assemble.ts:307-309, 311-333, 368-375`; `server/test/brief-assemble.test.ts:291-296`; §7 *Risk — input amplification*; D-16 |
 | Loading | Overview first load | Skeleton on the Why & Risk card only; `IntentCard` and `BlastCard` load independently and are never blocked by it | `IntentCard.tsx:38-49` skeleton precedent |
 | Loading | Assembly in flight | Generate/regenerate shows `Button loading`; any previously stored brief stays on screen and is not blanked | `Button.tsx:24, 71-82`; `IntentCard.tsx:119-127` |
 | Failure | Model call fails after its retries | 502; no stored brief replaced; any previous brief remains visible and marked out of date | `platform/errors.ts:31-35` |
@@ -256,15 +274,16 @@ feature owns.*
 
 | Class | Agreed value | Rationale |
 |---|---|---|
-| Limits — model input | **8 000 estimated tokens**, `cl100k_base`, measured over system + user messages (REQ-4) | The assignment's figure, with the unit fixed so two people measuring get the same number. Same counter and same figure as the approved sibling spec (D-2) |
+| Limits — model input | **8 000 estimated tokens as a budget, not a hard ceiling**: `cl100k_base`, measured over system + user messages (REQ-4), driven down by dropping whole items until the priority order reaches its floor. **At the floor the input is sent as-is, over budget** (REQ-4a) | The assignment's figure, with the unit fixed so two people measuring get the same number. Same counter and same figure as the approved sibling spec (D-2). It is stated as a budget because the assembler cannot enforce it at the floor and the spec must not claim otherwise (D-16) |
 | Limits — model output | **900 tokens** (`maxTokens` on the one structured request), i.e. the provider's own tokenizer | Enough for two short paragraphs, ~4 risks and ~6 focus entries with one-line reasons; blast's 150 sizes one paragraph (`blast/summary.ts:28-34`) and is far too small here. Under `completeStructured` an output cut short is invalid JSON and costs a retry, so this is sized with headroom |
 | Limits — inputs | 60 changed-file entries; 12 blast symbols with 6 callers each; linked issue 2 000 chars; resolved references 5 repo files / 5 GitHub / 3 URLs and 12 KB in total | Reuses caps already agreed for the same data: `intent/constants.ts:26`, `blast/summary.ts:26-27`, `docs/intent-layer.md:104-105, 196-198` |
+| **Risk — input amplification at the floor** | **Unbounded per call, deliberately, and bounded only in aggregate.** One changed file's re-rendered hunk headers are the single input with no cap of their own: `pr_files.patch` is stored verbatim as GitHub returns it, with **no stored size cap** (`adapters/github/octokit.ts:110`; `modules/pulls/routes.ts:265-273`; `modules/reviews/service.ts:135-141`), and REQ-5's floor keeps the last file in. What *does* bound it: the **5/min** POST rate limit on the assembling route (`modules/brief/routes.ts:73`), and **D-14's explicit press** — a human presses Generate for every call, and no poll, import, PR open or review run ever assembles. **Nothing else bounds it** | Accepted as **cost inflation on an attacker-shaped diff, not a runaway**: a PR author who scatters thousands of small hunks through one large file inflates the paid input for whoever presses Generate, or triggers a 502 when the provider's context window is exceeded. Neither can loop, spend without a press, or reach the review verdict (D-3). The alternatives — capping the stored patch, or refusing to brief the PR — are both wider changes than this spec owns and are named in Out of scope (D-16) |
 | Limits — output rendering | ≤ 8 review-focus entries and ≤ 6 risks rendered | The design shows 4 focus entries and 3 risk areas; beyond ~8 the list stops being "read these first" |
-| Limits — rate | 5 assemblies per minute on the assembling route, inside the global 120/min. The read route takes no override | Exactly the override intent and the blast summary use for a paid route (`intent/routes.ts:33`, `blast/routes.ts:54`). The read route is free of model calls by REQ-9, so it needs no protection beyond the global limit |
+| Limits — rate | 5 assemblies per minute on the assembling route, inside the global 120/min. The read route takes no override | Exactly the override intent and the blast summary use for a paid route (`intent/routes.ts:33`, `blast/routes.ts:54`). The read route is free of model calls by REQ-9, so it needs no protection beyond the global limit. It is also, per the row above, one of only two things bounding the floor case |
 | Latency — read | Under 300 ms, with no outbound call other than the reads needed to compute the fingerprint | A read that fetched a live issue over the network would be neither fast nor free |
-| Latency — assembly | Model call timeout 60 s; reference resolution bounded by the shipped per-fetch timeouts; the whole request gives up at 90 s with a 502 | One structured call over ≤ 8 000 input tokens. `StructuredRequest.timeoutMs` already exists (`adapters.ts:62`); `web-fetch.ts` already enforces its own timeout |
-| Degradation | Drop whole input items from the end of the fixed priority order, never truncate an item, never fail the assembly (REQ-5). A failed reference, an absent issue, a degraded map each degrade the input, not the feature — unless intent is also absent (REQ-11) | The package rule: "Context enrichment is best-effort: on error/unindexed, omit the section, don't throw" (`server/CLAUDE.md`) |
-| Observability | One structured record per assembly: source list, resolved and skipped references by source with reasons, estimated input tokens, `tokensIn`/`tokensOut`, cost, discard count, dropped-item list, resolved model (REQ-15) | A brief that quietly shrank its own input must be explainable without logging the input |
+| Latency — assembly | Model call timeout 60 s; reference resolution bounded by the shipped per-fetch timeouts; the whole request gives up at 90 s with a 502 | One structured call over an input the assembler drives toward 8 000 tokens. `StructuredRequest.timeoutMs` already exists (`adapters.ts:62`); `web-fetch.ts` already enforces its own timeout |
+| Degradation | Drop whole input items from the end of the fixed priority order, never truncate an item, never fail the assembly (REQ-5) — and, at the floor, send over budget rather than refuse (REQ-4a). A failed reference, an absent issue, a degraded map each degrade the input, not the feature — unless intent is also absent (REQ-11) | The package rule: "Context enrichment is best-effort: on error/unindexed, omit the section, don't throw" (`server/CLAUDE.md`). The floor is that rule taken to its end: with nothing left to omit, we still do not throw |
+| Observability | One structured record per assembly: source list, resolved and skipped references by source with reasons, estimated input tokens, `tokensIn`/`tokensOut`, cost, discard count, dropped-item list, **whether the drop order was exhausted with the input still over budget** (REQ-4a), resolved model (REQ-15) | A brief that quietly shrank its own input must be explainable without logging the input — and a brief that quietly *exceeded* its budget must be findable, since the estimate alone does not say whether the assembler gave up or never needed to |
 | Observability — safety | No input content in any log or record. A dropped or skipped item is named by source and reason, never by content; a discarded reference string is recorded only where it is already a repository path — never issue or document prose | The safety contract at `reviews/prompt-log.ts:14-21`, asserted against planted secrets by `server/test/prompt-log.test.ts` |
 | Cost attribution | The brief's cost is returned and recorded on the brief, and is **not** folded into `agent_runs` | `agent_runs` models exactly one review interaction; folding a brief in would double-count it across every agent reviewing the same PR (`server/docs/intent-layer.md:254-258`) |
 | Data lifecycle | One row per PR, replaced on regeneration, cascade-deleted with the PR. No history, no TTL, not user-deletable independently of the PR | `pr_brief.pr_id` PK with `ON DELETE CASCADE` (`db/schema/reviews.ts:74-79`). History is D-9's separate spec |
@@ -292,9 +311,12 @@ flowchart TD
   K -- yes --> R["422 — refuse, name both<br/>missing inputs"]
   K -- no --> L["Allow-list from changed files<br/>+ blast map; assemble paths,<br/>counts and hunk RANGES only"]
   L --> M{"Over 8,000<br/>cl100k_base tokens?"}
-  M -- yes --> N["Drop whole items from the end<br/>of the priority order; record each"]
-  N --> M
   M -- no --> O["ONE structured model call"]
+  M -- yes --> N{"Anything left we are<br/>willing to drop?<br/>FLOOR: 1 file, 1 symbol"}
+  N -- yes --> N2["Drop the next whole item from<br/>the end of the priority order;<br/>record it"]
+  N2 --> M
+  N -- "no — floor reached" --> Y["Record the estimate and the<br/>EXHAUSTED order; send anyway,<br/>OVER BUDGET (REQ-4a)"]
+  Y --> O
   O --> Q{"Valid against<br/>the schema?"}
   Q -- "no, after retries" --> X["502 — keep any previous brief,<br/>marked out of date"]
   Q -- yes --> S["Filter every reference against<br/>the allow-list; cap risk_level;<br/>store brief + fingerprint"]
@@ -306,6 +328,11 @@ flowchart TD
 recoverable: the regenerate control is offered on a brief that reads as current, not only on one
 marked out of date, because the read path cannot see those two inputs move (D-1a).*
 
+*The `N → Y → O` path is the loop's floor, drawn because the earlier version of this diagram
+showed the drop loop without it and so read as an unconditional budget. It is REQ-4a: with one
+changed file and one symbol left, the input is sent over budget rather than the assembly being
+refused (D-16). A provider that rejects it for exceeding its context window arrives at `X`.*
+
 ## 9. Module interactions
 
 | From | To | What crosses | On failure | Owns the data |
@@ -313,14 +340,14 @@ marked out of date, because the read path cannot see those two inputs move (D-1a
 | client Why & Risk card | server `brief` (read) | PR id → the stored brief, whether its locally recomputable fingerprint components match, its provenance and cost | Render the card's error state; leave `IntentCard` and `BlastCard` untouched | server |
 | client Why & Risk card | server `brief` (assemble / regenerate) | An explicit assembly request | Surface the error inline, keep the previous brief on screen marked out of date, never blank the card | server |
 | client Why & Risk card | client Files changed tab | A file path and an optional line, as in-app navigation | Open the tab with no scroll target and state the file is not in the current diff | client |
-| server `brief` | server `pulls` data (`pull_requests`, `pr_files`, `pr_commits`) | PR row, changed-file paths and counts, hunk ranges parsed locally, the PR body | PR not found → 404; zero changed files → 422 | `pulls` |
+| server `brief` | server `pulls` data (`pull_requests`, `pr_files`, `pr_commits`) | PR row, changed-file paths and counts, hunk ranges parsed locally, the PR body | PR not found → 404; zero changed files → 422. **No size gate:** `pr_files.patch` arrives uncapped, and a single file's hunk headers may exceed the input budget (REQ-4a) | `pulls` |
 | server `brief` | server `intent`, via `container.intent(logger)` | Read-only `get` of the stored `PrIntentRecord` | Continue without it; record `intent: absent`. **Never** `getOrCompute` — that would be a second model call | `intent` |
 | server `brief` | server `intent`'s reference resolver | The PR body → resolved plan/spec/ticket documents, under the shipped per-kind caps, the 12 KB budget and the `repo-file → github → url` order. **Reached on the assembly path only** — never on the read path (D-1a) | **Per-reference best-effort:** each fetch is individually wrapped, one failure never affects the others, and none ever fails the assembly. Every skip is recorded by source with a reason | `intent` owns the resolver; the documents belong to the user's repository and to GitHub |
 | server `brief` | the repository clone (local filesystem), through that resolver | A repo-relative path under the documentation allow-list → the document's text | **The traversal guard is re-applied at the last gate before the read**, rejecting `..`, a leading `/`, Windows-absolute paths and NUL bytes; a rejected path is never opened and is recorded as skipped | the user's repository — read-only |
 | server `brief` | GitHub, via `container.github()` | The linked issue's number, state, title and body; and `#N` references from the body. **Assembly path only** — never on the read path (D-1a) | Continue without them and record their absence; never fail the assembly | GitHub |
 | server `brief` | external HTTP, via `container.webFetch` | Only `https://` references from the PR body, and only when `INTENT_EXTERNAL_FETCH_ENABLED` is on | The getter throws `ConfigError` at its default `false`; the caller treats it as "skip external references". No request leaves the machine | third-party — untrusted |
 | server `brief` | server `blast` | The `BlastResponse`: `state`, `indexed_sha`, `counts`, `map`, `prior_prs` | `degraded` → continue with an empty map and record it; any error → treat as `degraded` | `blast` (over `repo-intel`'s index) |
-| server `brief` | LLM provider, via `container.llm(provider)` for `risk_brief` | One structured request; back come the parsed object, model, `tokensIn`, `tokensOut`, `costUsd`, `attempts` | 502 after the provider's retries; nothing is stored | provider |
+| server `brief` | LLM provider, via `container.llm(provider)` for `risk_brief` | One structured request — normally at or under the 8 000-token budget, and over it in REQ-4a's floor case; back come the parsed object, model, `tokensIn`, `tokensOut`, `costUsd`, `attempts` | 502 after the provider's retries; nothing is stored. A context-window rejection on an over-budget input arrives by this same path | provider |
 | server `brief` | `pr_brief` | The brief document, its fingerprint and its provenance | Write failure → 502; the brief is not reported as stored | server `brief` |
 
 Direction respected: `client → server`, and nothing reaches `reviewer-core`, which this feature
@@ -372,7 +399,7 @@ instructions are never followed — the pattern already applied to a third-party
 |---|---|---|---|---|
 | Derived intent | `pr_intent` row, read through `container.intent(logger).get` (`intent/service.ts:48-54`) | **Untrusted** — derived from author-controlled PR prose; already carried to the reviewer as `<untrusted source="pr-intent">` | Stale whenever `pr_intent.head_sha` ≠ the PR head; the brief reads and never derives | Assemble without it and record its absence; refuse only if the blast map is also degraded (REQ-11) |
 | Blast map | `BlastResponse` (`blast/contract.ts:66-83`), built from `repo_index_state`, `file_edges`, `file_facts` | **Untrusted content, trusted topology** — symbol names, paths and endpoint strings come from a third-party repository, so they are fenced; the *graph* is our own index, which is what makes it authoritative for the allow-list | Valid at `indexed_sha` only, which can lag the head by tens of commits | Continue with an empty map; the allow-list falls back to the changed-file list; risks lose caller and endpoint grounding |
-| Diff statistics and changed files | `pull_requests.additions/deletions/files_count` (`db/schema/pulls.ts:22-24`) and `pr_files.path/additions/deletions` (`:36-45`); hunk ranges parsed locally from `pr_files.patch` and never sent | **Untrusted paths, trusted counts** — the paths are third-party strings, the counts are ours. The paths are the primary allow-list | Refreshed by `GET /pulls/:id`; empty on a PR polled but never opened | Refuse with 422 — with no changed files there is no allow-list and nothing to brief |
+| Diff statistics and changed files | `pull_requests.additions/deletions/files_count` (`db/schema/pulls.ts:22-24`) and `pr_files.path/additions/deletions` (`:36-45`); hunk ranges parsed locally from `pr_files.patch` and never sent | **Untrusted paths, trusted counts** — the paths are third-party strings, the counts are ours. The paths are the primary allow-list. **`pr_files.patch` is stored with no size cap** (`adapters/github/octokit.ts:110`; `pulls/routes.ts:265-273`; `reviews/service.ts:135-141`), so the hunk-range rendering of a single file is the one input the budget cannot bound — REQ-4a and §7's *Risk — input amplification* | Refreshed by `GET /pulls/:id`; empty on a PR polled but never opened | Refuse with 422 — with no changed files there is no allow-list and nothing to brief |
 | Linked issue | `PrDetail.linked_issue` (`contracts/platform.ts:218`), resolved live from GitHub by regex over the PR body (`adapters/github/octokit.ts:126-131`); **never persisted** | **Untrusted** — third-party prose, fenced as `<untrusted source="linked-issue">` per `docs/intent-layer.md:104` | Live at assembly time; can change with no new commit, which is why its digest is in the fingerprint — but that digest is compared only at the **next assembly**, never on read (D-1a) | Assemble without it and record its absence |
 | Specification and plan documents | **The PR body's own references, resolved at assembly time** through the shipped parser and resolver (`modules/intent/references.ts`): repository markdown under the documentation allow-list read from the clone via `container.git.readFile`; `#N` and `github.com/…/issues\|pull/N` references via `getIssue` with a `getPullRequest` fallback; `https://` links only when `INTENT_EXTERNAL_FETCH_ENABLED` is on (default **false**) — all under the per-kind caps and the 12 KB budget (D-13) | **Untrusted**, fenced as `<untrusted source="spec:…">`. Every one of the three kinds originates in text the PR author controls: the *link* is chosen by the author even when the *document* is committed by the team, which is exactly why the repo-file kind is confined to an allow-list of documentation directories and re-checked before the read | Read live at assembly time. A clone document is as fresh as the last `POST /repos/:id/resync`; a GitHub reference is live; an external document is live. Each contributing document's digest is in the fingerprint, so an edit is caught at the **next assembly** rather than on the next read (D-1a) | Assemble without them and record the source list as empty. **A PR that links nothing is the normal case, not a degradation** |
 | Feature-model choice | `settings.feature_models.risk_brief` via `resolveFeatureModel` (`platform/feature-models.ts:58-64`) | **Trusted (ours)** | Read per request; in the fingerprint, so changing the model invalidates the cache | Registry default `openai` / `gpt-4.1` (`contracts/platform.ts:63-69`) |
@@ -392,16 +419,19 @@ explicitly — never a silent upgrade of this one.
 exist — which in practice means the PR has been opened once through `GET /pulls/:id`, since
 polling alone imports metadata only. `pr_files.patch` must be present for line grounding to
 work; where it is null the file is still allow-listed and its review-focus entries carry no line.
-The blast map may legitimately be empty, and an empty map must never be read as "this change
-impacts nothing". The stored intent may describe an older head; the brief records which intent
-row it used rather than pretending it was current. The linked issue and every GitHub reference
-are fetched live and may be unavailable offline. A referenced repository document is read from
-the clone, which advances only via `POST /repos/:id/resync`, so it may lag the branch head. Both
-of those last two are read at assembly time only, so a stored brief may describe an issue or a
-document that has since been edited without the read path being able to say so (D-1a) — which is
-why `generated_at` and the provenance list are part of the record rather than debug output. The
-`pr_brief` row as shipped has room for the brief document but no field able to hold a fingerprint
-or provenance, so REQ-8 and REQ-15 cannot be satisfied by the table as it stands.
+**Where it is present it may be arbitrarily large — nothing on the write path caps it — and its
+hunk *count*, not its size, is what reaches the model input; a file with thousands of hunks is
+therefore the one input the budget cannot bound (REQ-4a).** The blast map may legitimately be
+empty, and an empty map must never be read as "this change impacts nothing". The stored intent
+may describe an older head; the brief records which intent row it used rather than pretending it
+was current. The linked issue and every GitHub reference are fetched live and may be unavailable
+offline. A referenced repository document is read from the clone, which advances only via
+`POST /repos/:id/resync`, so it may lag the branch head. Both of those last two are read at
+assembly time only, so a stored brief may describe an issue or a document that has since been
+edited without the read path being able to say so (D-1a) — which is why `generated_at` and the
+provenance list are part of the record rather than debug output. The `pr_brief` row as shipped
+has room for the brief document but no field able to hold a fingerprint or provenance, so REQ-8
+and REQ-15 cannot be satisfied by the table as it stands.
 
 **The grounding allow-list**, referenced by REQ-6, is the union of: the PR's changed file paths;
 the blast map's `changed_symbols[].file`; its `downstream[].callers[].file`; its
@@ -428,6 +458,7 @@ not an observation.
 | PR Overview | `risk_level` is a three-level band, exactly the shape `IntentCard`'s confidence has | idea | Use `Badge`/`SeverityBadge` with the level as a **word** plus an icon (`Badge.tsx:51-88`). `ConfidenceNum` is percentage-only, and mapping a band to a fake number reintroduces the invented precision the enum exists to avoid | Adopted — `client/INSIGHTS.md` 2026-08-17 |
 | PR Overview | `MonoLink` already has an internal `onClick` variant alongside the external `href` variant used in `BlastCard` (`MonoLink.tsx:3-53`, `BlastCard.tsx:220-242`) | idea | Use the `onClick` variant for review focus — in-app navigation, not a GitHub blob link. Nothing new is needed | Adopted |
 | PR Overview | **F-9 — The regenerate control cannot be gated on the out-of-date marker.** Under D-1a an edited linked issue or an edited referenced document leaves the card reading as current, so a regenerate affordance offered only on a stale-marked brief would leave the user with no way to pick those edits up | should | Offer regenerate on **every** rendered brief, current or out of date — the §8 `G → P` edge — and place `generated_at` where the user can see how old the brief is. This is what `IntentCard`'s always-present `useRecomputeIntent` button already does (`IntentCard.tsx:68-131`) | Adopted — REQ-10 already says "regardless of any matching stored fingerprint"; this records why it must also be *reachable* regardless |
+| PR Overview | **F-10 — A brief assembled at REQ-4a's floor cost more than the budget the card implies, and the card cannot say so.** The recorded estimate is over 8 000 and the provenance records the exhausted drop order, but nothing on the Why & Risk card distinguishes that brief from a normal one *(added 2026-08-28)* | idea | The provenance record is where a maintainer looks (§7 *Observability*), and that is enough for now: the case is rare, the user cannot act on it, and a warning nobody can act on is the same noise `discarded_refs` is already open on in §14. Revisit only if the case is observed | Recorded — deferred, not adopted; D-16 |
 | All | Only the dark theme at regular density was observable this session — the two screenshots — and the committed bundles could not be opened (`file://` is blocked) | should | The card must be checked in both `data-theme` values and both `data-density` values before it is called done | Recorded — §6 and §14 |
 
 ## 12. Traceability
@@ -437,8 +468,9 @@ not an observation.
 | REQ-1 | AC-1 | Cardinality zero (no brief, no risks) | client card → server `brief` (read) | new — F-1: no what/why/risk card in the design | 09-pr-brief |
 | REQ-2 | AC-2, AC-3, AC-4, AC-5 | Cardinality zero (no references) and many (forty links); Degraded dependency ×7; Freshness ×3 | `brief` → `intent` / reference resolver / clone / GitHub / webFetch / `blast` / LLM | — (server-side) | 09-pr-brief (asserts no call, AC-34) |
 | REQ-3 | AC-6 | — | `brief` → `pulls` data | — | 09-pr-brief |
-| REQ-4 | AC-7, AC-8 | Cardinality many (300 files) | `brief` → LLM | — | — |
-| REQ-5 | AC-9, AC-10, AC-11 | Cardinality many ×3 | `brief` → LLM; `brief` → reference resolver | — | — |
+| REQ-4 | AC-7, AC-8 | Cardinality many (300 files); Cardinality more-than-fits (single file, thousands of hunks — the case REQ-4 does **not** cover, handed to REQ-4a) | `brief` → LLM | — | — |
+| REQ-4a | AC-7a | Cardinality more-than-fits (single file, thousands of hunks); Failure (model call fails — a context-window rejection arrives here) | `brief` → `pulls` data (uncapped `patch`); `brief` → LLM (over-budget request) | — | — |
+| REQ-5 | AC-7a, AC-9, AC-10, AC-11 | Cardinality many ×3; Cardinality more-than-fits (the floor) | `brief` → LLM; `brief` → reference resolver | — | — |
 | REQ-6 | AC-12, AC-13, AC-14, AC-15 | Cardinality zero (all discarded); Freshness (`indexed_sha` behind head); Content extremes (invented endpoint) | `brief` → `blast`; `brief` → `pulls` data | REVIEW FOCUS — F-3: all four design entries pass the filter | 09-pr-brief |
 | REQ-7 | AC-16, AC-17 | Content extremes (hostile document or body) | `brief` → LLM | — | — |
 | REQ-8 | AC-19, AC-20 | Freshness ×4 — including the edited issue/document row, which is **REQ-8-only** (D-1a) | `brief` → `pr_brief`; `brief` → GitHub; `brief` → reference resolver | — | — |
@@ -448,14 +480,17 @@ not an observation.
 | REQ-12 | AC-27, AC-28 | Loading; Failure (read fails); Theme & density; Accessibility (band as a word); Narrow viewport | client card → server `brief` (read) | new card (F-1) + REVIEW FOCUS (F-2) | 09-pr-brief |
 | REQ-13 | AC-29, AC-30 | Navigation ×3; Content extremes (long paths); Accessibility (keyboard path) | client card → client Files changed tab | REVIEW FOCUS → Files changed (F-3, F-4) | 09-pr-brief |
 | REQ-14 | AC-31 | Freshness ×3 (`indexed_sha` behind head, stale intent, stale clone); Concurrency (head moves mid-assembly); Failure (model call fails) | client card → server `brief` (read) | new — out-of-date marker | — |
-| REQ-15 | AC-32, AC-33 | Content extremes (planted secrets); Degraded dependency ×4 (each skip is recorded) | `brief` → `pr_brief`; `brief` → reference resolver | — | — |
+| REQ-15 | AC-32, AC-33 | Content extremes (planted secrets); Degraded dependency ×4 (each skip is recorded); Cardinality more-than-fits (the exhausted drop order is recorded) | `brief` → `pr_brief`; `brief` → reference resolver | — | — |
 
 ## 13. Decisions
 
 Append-only. D-13, D-14 and D-15 record the answers to this spec's blocking questions; D-10 was
 confirmed as the fourth. D-1a was appended on 2026-08-27, after the cross-model review of
 `docs/plans/pr-why-risk-brief.md`, to record what the plan's fingerprint split traded away; it
-amends D-1's consequences without disturbing D-1's own reasoning, which stands unchanged.
+amends D-1's consequences without disturbing D-1's own reasoning, which stands unchanged. D-16
+was appended on 2026-08-28, after a security review of the landed code, to correct REQ-4 to the
+behaviour that shipped; it likewise amends nothing above it, and D-2's token unit, the model, the
+900-token output cap and every other decision on this table stand exactly as written.
 
 | Question | Answer | Date |
 |---|---|---|
@@ -476,6 +511,7 @@ amends D-1's consequences without disturbing D-1's own reasoning, which stands u
 | D-13: Where the "relevant specs" input comes from *(answer to blocking question 1)* | **Re-resolve the PR body's own references at assembly time**, through the shipped parser and resolver (`modules/intent/references.ts`), under the same documentation-directory allow-list, the same traversal guard re-checked at the last gate before a read, the same per-kind caps (5 repo files / 5 GitHub / 3 URLs), the same 12 KB budget, the same `repo-file → github → url` resolution order, and the same `INTENT_EXTERNAL_FETCH_ENABLED` flag at its default **false**. Chosen over waiting for `project-context/01` (which would block this lesson on another) and over shipping with four inputs (which would drop a source the assignment names). It adds a caller, not a capability: no new parser, no new fetcher, no new security surface. **What it does not give us: no attachment UI, no per-agent or per-skill selection, and no document that the PR body does not itself reference** — a repository can hold a directly relevant spec this brief never sees. **Coordination point:** when `project-context/01` lands, attached documents become a *second possible source* for this input; adopting them changes REQ-2 and REQ-8 and is therefore a later numbered spec's explicit decision, never a silent upgrade of this one | 2026-08-27 |
 | D-14: When the model is called *(answer to blocking question 2)* | **On an explicit press only.** Opening a pull request performs a cache-only read that never calls a model; assembly happens when the user presses generate, and thereafter on regenerate. Chosen over intent's lazy-derive-on-open because it satisfies the course's cache criterion **exactly** — re-opening the same PR state reads stored state with no model call, by construction rather than by a fingerprint comparison that happens to hit — and because it keeps the e2e flow LLM-free **structurally** rather than by relying on a `NODE_ENV=test` guard. Intent needed that guard precisely because it derives on open (`pulls/routes.ts:344-351`); this feature does not need one, and inheriting it would hide a design property behind an environment check. It also means no first open of any PR ever spends money the user did not ask for. Consequence: the shipped `brief.unavailableHint` — *"Run a review or open the PR to compute it."* — is wrong twice over and is replaced with *"Generate a brief to see what this PR changes, why, and what to review first."* (F-6) | 2026-08-27 |
 | D-15: What the card is called *(answer to blocking question 3)* | **"Why & Risk".** The design already binds the label "PR BRIEF" to the review verdict block — verdict, findings count, score 61, cost — so giving the new card that name would put two different things under one label on one screen. The design's block keeps "PR Brief" for whenever it is built, and **nothing shipped is renamed**. To be explicit, because the next reader will otherwise think these disagree: the **module, the route and the stored record all stay `brief`** (`modules/brief`, `/pulls/:id/brief`, `pr_brief`); only the **user-facing label** is "Why & Risk" | 2026-08-27 |
+| D-16: The 8 000-token input budget is **not enforceable at the floor of the priority order**, so which side changes — the spec or the code? *(corrects REQ-4; adds REQ-4a. Amends nothing above it: D-2's unit, the model, the 900-token output cap and D-8's order all stand)* | **The spec changes; the behaviour stays.** A security review of the landed code established that REQ-4 promised a guarantee the design cannot deliver. `dropNext` floors the changed-file list at one file and the blast map at its highest-ranked symbol (`modules/brief/assemble.ts:311-333`), and `assembleBriefInput`'s loop `break`s when `dropNext` returns null and sends the call anyway (`:368-375`) — asserted as intended by `server/test/brief-assemble.test.ts:291-296`. The last remaining file still contributes `hunkRanges(f.patch)`, one re-rendered `@@` line per hunk (`assemble.ts:125-132, 186`), and **`pr_files.patch` has no stored size cap**: the GitHub adapter passes `f.patch` through verbatim (`adapters/github/octokit.ts:110`) into `modules/pulls/routes.ts:265-273` and `modules/reviews/service.ts:135-141`. A PR author who edits every fourth line of a large file produces thousands of small scattered hunks, and **no other input can absorb them** — the issue is capped at 2 000 chars, references at 12 KB, symbols at 12, files at 60. So REQ-4's "SHALL keep the input at or below 8 000" was false as written. **Why the code is not the side that changes:** the alternative to sending an over-budget single file is refusing to brief that PR at all, and that reverses REQ-5's "complete the assembly rather than failing it" and D-8's reason for flooring the file list — the file list is the grounding allow-list, so an empty one means every model reference is discarded and the brief cites nothing. Truncating the hunk list instead would break REQ-3's whole-item discipline in a different direction. **Corrected here:** REQ-4 now states 8 000 as the budget the assembler drives toward and defers the escape to the new REQ-4a; REQ-5 names its own floor and the tension it creates; AC-7 and AC-9 gain the "while something remains droppable" qualifier and AC-7a covers the floor; §6 gains a *more than fits* row; §7 gains the *Risk — input amplification* row; §8's decision node gains its floor branch; §12 gains a REQ-4a row; F-10 records the deferred UI question. **Residual risk, accepted:** paid-token amplification on an attacker-shaped diff, or a 502 when the provider's context window is exceeded. It is **cost inflation, not a runaway** — bounded by the 5/min POST limit (`modules/brief/routes.ts:73`) and by D-14's rule that a human presses Generate for every call, and bounded by nothing else. Capping the stored patch, or refusing over-budget PRs, are both wider changes and are recorded in Out of scope for a later numbered spec | 2026-08-28 |
 
 ## 14. Assumptions & open questions
 
@@ -489,6 +525,20 @@ amends D-1's consequences without disturbing D-1's own reasoning, which stands u
 - 8 000 estimated input tokens plus 900 output tokens is comfortably affordable for the models in
   the `risk_brief` slot. *Invalidated by:* a workspace selecting a model whose context window
   cannot hold it, which would make the budget model-dependent rather than fixed.
+- **REQ-4a's floor case is rare and attacker-shaped rather than routine** *(added 2026-08-28)*.
+  It needs a single changed file whose hunk *count* — not its size — is large enough that its
+  re-rendered `@@` headers alone exceed 8 000 estimated tokens, which an ordinary refactor does
+  not produce and a deliberately scattered edit does. The assumption is that ordinary PRs never
+  reach the floor, so the 5/min limit and D-14's explicit press are proportionate containment and
+  no stored-patch cap is needed. *Invalidated by:* the exhausted-order flag appearing in the
+  provenance record for briefs nobody crafted — which would make a stored `pr_files.patch` cap,
+  or a hunk-count cap in the assembler, worth its own numbered spec, and would reopen F-10.
+- **The provider fails loudly, not silently, on an over-budget input** *(added 2026-08-28)*. The
+  §6 row and REQ-4a assume a context-window overflow arrives as a provider error and surfaces as
+  a 502 with no stored brief replaced, rather than as a silently truncated prompt the model
+  answers from. *Invalidated by:* a provider that truncates server-side, which would make an
+  over-budget brief a *wrong* brief rather than a failed one, and would make refusing the
+  assembly the better trade after all.
 - **The grounding filter stops invented references; it cannot stop misdirection.** A hostile PR
   description — or now, under D-13, a hostile *referenced document* — could steer the model
   toward a real but irrelevant file, or away from a real risk. Fencing and the system message are
@@ -522,6 +572,8 @@ amends D-1's consequences without disturbing D-1's own reasoning, which stands u
 
 **Open (non-blocking)**
 
+- Should a brief assembled at REQ-4a's floor be marked on the card, the way an out-of-date brief
+  is? F-10 defers this; the provenance record already carries the fact — product owner.
 - Should the brief appear anywhere other than the PR Overview tab — for example as a risk-level
   column on the PR list? — product owner.
 - Should `discarded_refs` be surfaced to the user, or only recorded? A visible count is honest
@@ -554,9 +606,14 @@ refusal naming both rather than a confident brief about nothing. A planted strin
 hunk body never reaches the model, and a planted secret in a linked issue or a referenced document
 never reaches a log.
 
-AC-1 through AC-34 pass, and an e2e flow named `09-pr-brief.flow.json` covers the empty state,
-the stored-brief read, the out-of-date marker and the review-focus click-through — calling no
-LLM, which it achieves by never pressing generate rather than by any environment guard.
+A maintainer can additionally confirm the budget's one honest limit: a PR whose **single** changed
+file carries enough scattered hunks to exceed 8 000 estimated tokens on its own still produces a
+brief rather than an error, with the over-budget estimate and the exhausted drop order both in the
+provenance record — the trade D-16 recorded, visible rather than assumed.
+
+AC-1 through AC-34, and AC-7a, pass, and an e2e flow named `09-pr-brief.flow.json` covers the
+empty state, the stored-brief read, the out-of-date marker and the review-focus click-through —
+calling no LLM, which it achieves by never pressing generate rather than by any environment guard.
 
 ## Sources
 
@@ -653,3 +710,22 @@ LLM, which it achieves by never pressing generate rather than by any environment
 - `docs/plans/pr-why-risk-brief.md:18` (BQ-1/A), `:238-241` (S7 — the local/remote split and
   which two components move only `remote`), `:270` (S11 — "recompute the **local** fingerprint
   only" on the read path), `:488` ("What BQ-1/A gives up, stated plainly")
+
+**Revision of 2026-08-28 (D-16)** — read this session, on the landed code
+- `server/src/modules/brief/assemble.ts:125-132` (`hunkRanges` — one re-rendered `@@` line per
+  hunk), `:186` (its use per changed file), `:296-333` (`dropNext`, with both floors and the
+  stated reason for each), `:358-375` (the drive-down loop, and the `break` commented "Nothing
+  left we are willing to drop — complete anyway (REQ-5)")
+- `server/src/modules/brief/constants.ts:40` (`TOKEN_BUDGET = 8_000`), `:88` (`BUDGET_REASON`)
+- `server/src/modules/brief/routes.ts:35-36, 73` — the 5/min override on the assembling route and
+  its stated precedent
+- `server/src/adapters/github/octokit.ts:106-111` — `patch: f.patch` passed through verbatim, no
+  size cap; `server/src/modules/pulls/routes.ts:263-273` and
+  `server/src/modules/reviews/service.ts:133-141` — both writers store it uncapped
+- `server/test/brief-assemble.test.ts:283-296` — the floor asserted as intended, and
+  "completes rather than failing when everything droppable is gone"
+- `server/test/brief.it.test.ts:413-416` — the shipped `≤ 8000` assertion, which holds only
+  because its fixture is benign; it is AC-7's realisation and now carries AC-7's qualifier
+- Security review of the landed change, finding: *"The 8 000-token cap is not a cap — the one
+  unbounded input is undroppable"* → confirmed against all of the above; the user directed that
+  the spec is the side that changes and the behaviour stays (D-16)

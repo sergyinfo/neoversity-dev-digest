@@ -47,6 +47,31 @@ export type MovedInput =
 export type BriefInput = "intent" | "blast" | "diff" | "linked_issue" | "references";
 
 /**
+ * How good the impact map the model was given was — recorded at assembly time,
+ * not the map's state now.
+ *
+ *  - `ok`       — the index was complete.
+ *  - `partial`  — the index skipped files, so a caller may be missing and a
+ *                 risk may therefore be UNDERSTATED. The card says so.
+ *  - `degraded` — no usable map reached the model. Impact is unknown, which is
+ *                 never the same as "nothing is affected".
+ *
+ * `null` on the response is a fourth thing again: not recorded. See
+ * `BriefResponse.blast_state`.
+ */
+export type BriefBlastState = "ok" | "partial" | "degraded";
+
+/**
+ * How much of the changed-file list reached the model. `listed < total` is the
+ * capped state — a risk in the files beyond the cap can never have been named,
+ * and the card says so rather than letting the brief read as complete.
+ */
+export interface ChangedFileCoverage {
+  listed: number;
+  total: number;
+}
+
+/**
  * A source identifier with why it did not make it in.
  *
  * `source` is DISPLAY TEXT, not a stable identifier: for a short GitHub
@@ -96,12 +121,30 @@ export interface BriefResponse {
   /** What to read first, most important first. May be empty. */
   review_focus: ReviewFocus[];
   state_fingerprint: BriefFingerprint;
-  inputs_used: BriefInput[];
+  /**
+   * Which sources contributed — `null` when the stored provenance could not be
+   * read at all. `[]` and `null` are different facts: the first says nothing
+   * contributed, the second says we do not know what this brief used, and
+   * rendering the second as the first is what made a healthy brief claim its
+   * repository was unindexed.
+   */
+  inputs_used: BriefInput[] | null;
   /** Source identifiers of the reference documents that resolved. */
   references_used: string[];
   references_skipped: SkippedSource[];
   /** References the model produced that grounding discarded. */
   discarded_refs: number;
+  /**
+   * The impact map's state at assembly time, or `null` when this brief does not
+   * record it (stored before the field, or an unreadable provenance).
+   *
+   * `null` is NOT `degraded`. A card may say "this repository is not indexed"
+   * only for `degraded`; for `null` it knows nothing about the index and must
+   * not pretend otherwise.
+   */
+  blast_state: BriefBlastState | null;
+  /** Changed-file coverage of the model input; `null` when not recorded. */
+  changed_files: ChangedFileCoverage | null;
   /** Null → render "—" via the shipped `formatCost`; never "$0.00". */
   model: string | null;
   cost_usd: number | null;

@@ -430,6 +430,14 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
       cost_usd: 0.0064,
       discarded_refs: 0,
       model: riskBriefModel.model,
+      // The same 'degraded' the local components record above: a fresh DB has
+      // no index, so no map contributed and the card must say the impact is
+      // unknown rather than imply there is none.
+      blast_state: 'degraded',
+      // Three `pr_files` rows are seeded for a PR whose `filesCount` is 9, so a
+      // real assembly could only ever list three of them — the capped state,
+      // stated rather than papered over with `total: 3`.
+      changed_files: { listed: 3, total: 9 },
     };
 
     const briefRepo = new BriefRepository(db);

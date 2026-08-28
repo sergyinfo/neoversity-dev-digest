@@ -804,6 +804,131 @@ d('L05 PR Why + Risk Brief (Testcontainers pg)', () => {
     await f.close();
   });
 
+  // ─────────────────────────────────── how good the inputs were ──
+
+  /**
+   * F-6 / spec §6: a `partial` index is the one state where a missing caller
+   * means a risk may be UNDERSTATED, and `inputs_used` cannot express it —
+   * `blast` is recorded identically for `ok` and `partial`, so the two briefs
+   * were byte-identical in everything the card could see.
+   */
+  it('carries a partial index through to the response, where inputs_used cannot', async () => {
+    const partial = appWith({
+      repoIntel: stubRepoIntel({ state: { status: 'partial', filesSkipped: 4 } }),
+    });
+    const pa = await partial.app;
+    const { pr: partialPr } = await setupPr();
+    const partialBody = (
+      await pa.inject({ method: 'POST', url: `/pulls/${partialPr.id}/brief` })
+    ).json<BriefResponse>();
+
+    const ok = appWith();
+    const oa = await ok.app;
+    const { pr: okPr } = await setupPr();
+    const okBody = (
+      await oa.inject({ method: 'POST', url: `/pulls/${okPr.id}/brief` })
+    ).json<BriefResponse>();
+
+    expect(partialBody.blast_state).toBe('partial');
+    expect(okBody.blast_state).toBe('ok');
+    // The reason the field had to exist: membership is identical either way.
+    expect(partialBody.inputs_used).toEqual(okBody.inputs_used);
+    expect(partialBody.inputs_used).toContain('blast');
+
+    // …and it survives the round trip through `pr_brief.provenance`, which is
+    // where the card actually reads it from.
+    const stored = (
+      await pa.inject({ method: 'GET', url: `/pulls/${partialPr.id}/brief` })
+    ).json<BriefResponse>();
+    expect(stored.blast_state).toBe('partial');
+    // Coverage travels with it: one changed file, all of it listed.
+    expect(stored.changed_files).toEqual({ listed: 1, total: 1 });
+    await pa.close();
+    await oa.close();
+  });
+
+  /** A degraded map is a POSITIVE fact — "no usable index" — and stays one. */
+  it('records a degraded map as degraded rather than as an absent one', async () => {
+    const { app } = appWith({
+      repoIntel: stubRepoIntel({ state: { status: 'degraded', degradedReason: 'no_data' } }),
+    });
+    const a = await app;
+    // Intent is present, so REQ-11 lets the assembly proceed on one input.
+    const { pr } = await setupPr();
+
+    const body = (
+      await a.inject({ method: 'POST', url: `/pulls/${pr.id}/brief` })
+    ).json<BriefResponse>();
+
+    expect(body.blast_state).toBe('degraded');
+    expect(body.inputs_used).not.toContain('blast');
+    await a.close();
+  });
+
+  /**
+   * F-7 — the `provenance` column is nullable and a row that predates the
+   * feature has one. Serving `inputs_used: []` for it made the card say
+   * "Impact is unknown — this repository is not indexed" over a brief that may
+   * have been assembled from a perfectly healthy map. Unknown is its own
+   * answer and must reach the client as one.
+   */
+  it('serves an unreadable provenance as unknown, never as a degraded index', async () => {
+    const { app } = appWith();
+    const a = await app;
+    const { pr } = await setupPr();
+
+    // A row exactly as the pre-widening schema allowed: a document, a
+    // fingerprint, and no provenance at all.
+    await pg.handle.db.insert(t.prBrief).values({
+      prId: pr.id,
+      json: BRIEF_FIXTURE,
+      stateFingerprint: JSON.stringify({ local: 'x', remote: 'y', local_components: {} }),
+      provenance: null,
+      generatedAt: new Date('2026-08-20T09:00:00.000Z'),
+    });
+
+    const res = await a.inject({ method: 'GET', url: `/pulls/${pr.id}/brief` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<BriefResponse>();
+
+    // The brief itself still reads — an unknown provenance is not a reason to
+    // withhold it.
+    expect(body.what).toBe(BRIEF_FIXTURE.what);
+    // Unknown, and NOT the two things it is not: `[]` ("nothing contributed")
+    // and `degraded` ("this repository has no usable index").
+    expect(body.inputs_used).toBeNull();
+    expect(body.blast_state).toBeNull();
+    expect(body.changed_files).toBeNull();
+    await a.close();
+  });
+
+  it('treats a provenance whose shape has drifted the same as an absent one', async () => {
+    const { app } = appWith();
+    const a = await app;
+    const { pr } = await setupPr();
+
+    await pg.handle.db.insert(t.prBrief).values({
+      prId: pr.id,
+      json: BRIEF_FIXTURE,
+      stateFingerprint: JSON.stringify({ local: 'x', remote: 'y', local_components: {} }),
+      // Shape drift: `inputs_used` was never a string.
+      provenance: { inputs_used: 'blast', discarded_refs: 4 },
+      generatedAt: new Date('2026-08-20T09:00:00.000Z'),
+    });
+
+    const body = (
+      await a.inject({ method: 'GET', url: `/pulls/${pr.id}/brief` })
+    ).json<BriefResponse>();
+
+    expect(body.inputs_used).toBeNull();
+    expect(body.blast_state).toBeNull();
+    // Nothing is salvaged field-by-field out of a record that did not parse:
+    // a `discarded_refs` read out of an otherwise-invalid shape would be a
+    // number nobody can vouch for.
+    expect(body.discarded_refs).toBe(0);
+    await a.close();
+  });
+
   /**
    * Tenancy — the ownership check runs BEFORE any `pr_brief` access.
    *
