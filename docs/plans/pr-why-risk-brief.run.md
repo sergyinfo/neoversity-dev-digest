@@ -10,12 +10,12 @@ Ceiling: **16** — raised from the plan's 13 at the Stage 1→2 boundary (see D
 |---|---|---|---|
 | 0 | Intake & baseline | **done** | Tree committed clean (`4033e72`, `b5cd777`); pnpm blocker cleared; baseline green on both packages |
 | 1 | Implementation (T0–T8) | **done** | all 9 tracks landed, `3c02235`…`c55d8a9` |
-| 2 | Review ×3 | **in progress** | R2 boundary **pass, no crossings** · R3 correctness · R4 security, over `b5cd777..HEAD` |
-| 3 | Fix loop (≤2 rounds) | pending | — |
-| 4 | Verification | pending | — |
+| 2 | Review ×3 | **done** | R2 boundary: no crossings · R3 correctness: 3 major, 8 minor · R4 security: 0 blocker, 4 minor |
+| 3 | Fix loop (2 rounds) | **done** | Round 1 `c89c2d0` (F1–F5) · Round 2 `0bb0088` (F6–F7) + the D-16 spec revision. Nothing contested |
+| 4 | Verification | **done** | 18/20 steps verified · 28/35 ACs verified · **AC-7a not built** · 5 e2e-dependent rows `cannot tell` |
 | 5 | Land | pending | — |
 
-**Agent count: 12 / 16** — one `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2.
+**Agent count: 16 / 16 — at the ceiling.** One `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2, two fix rounds, one `specreator` for the D-16 revision, one `plan-verifier`. (A 17th launch died on an API error before writing anything and is not counted — it did no work.)
 
 ### Tracks
 
@@ -131,4 +131,58 @@ Recorded for `/retro`.
 
 ## Open at the end
 
-*(Stage 1 nearly done — T8 outstanding, then Stages 2–5.)*
+### 1. AC-7a is not built — the one place work is done and its criterion still fails
+
+The D-16 spec revision made REQ-4a **require** that an assembly record "the fact that the drop
+order was exhausted". Nothing records it. `assemble.ts:376-377` breaks out of the drive-down loop
+and sets no flag; `provenance.ts:70-84` has no such field; no test names AC-7a or REQ-4a.
+
+This is a gap the pipeline created rather than inherited: fix round 2's brief explicitly put the
+budget floor out of scope because the user had chosen to revise the spec instead — and the
+revision then introduced a *new* obligation that no round was scoped to satisfy. The spec landed;
+the code it now demands did not.
+
+The nearest test, `brief-assemble.test.ts:294-326`, forces the floor with `countTokens: () =>
+1_000_000` and asserts the full drop list and an over-budget estimate. It cannot assert the
+exhaustion record (there is none) and, being a pure-function test, cannot assert that exactly one
+structured call is still issued.
+
+### 2. AC-28 has no e2e coverage, and the plan is why
+
+S19 required an empty-state assertion for "a PR with no brief"; S18 gave the only seeded PR a
+brief and authorised no second one. **The two steps contradict each other, and it was
+discoverable at plan time.** The card's empty state is covered at unit level
+(`WhyRiskCard.test.tsx:384`) but not end to end. Settled by a second seeded PR plus a flow step,
+or by re-grading AC-28's `Verified by` to unit.
+
+### 3. Five rows are `cannot tell`, all for one environmental reason
+
+`./scripts/e2e.sh` gives 5/8 on this machine; flows `04`, `05` and `09` fail on the same
+`find text … click`. The verifier reproduced it and read the mechanism straight out of the API
+log: a real PAT makes the PR-list load do a doomed 404 round trip to GitHub, and `find` does not
+poll the way `wait` does. It tried to isolate the variable with a scratch `HOME` — `secretsPath`
+is hardcoded at `platform/config.ts:100` with no env override — and got 0/8, so that settles
+nothing. **Settled by CI** (`.github/workflows/e2e-web.yml` brings up a stack with no PAT).
+
+Affected: AC-27 (e2e half), AC-29 (navigation half), AC-34, S18's behavioural Done-when, S19.
+
+### 4. Plan defects worth carrying into `/retro`
+
+- The plan is **stale against its own binding spec**: 34 AC rows where the spec now has 35, and
+  the pre-revision REQ-4 wording. Verification was done against the spec.
+- **S11's Done-when grep gate is unsatisfiable by well-commented code** — `grep getOrCompute|
+  NODE_ENV` cannot return nothing in a module that documents why it avoids them. It needs a
+  code-only qualifier to be checkable as written.
+- **S18's Done-when is behavioural with no runnable assertion**, so S18 cannot be verified
+  independently of S19.
+- The verification table names flows `01`–`09`; `08` does not exist and the plan says so itself.
+
+### 5. Smaller
+
+- **AC-5's NUL-byte half has no test.** The guard is present and unmodified
+  (`references.ts:82`); the existing suite covers traversal, absolute, Windows-absolute and
+  out-of-allow-list, but nothing plants a `\0` path.
+- **S4 landed a third additive change** where the plan said "two and nothing else" — a
+  `unavailableReason(ref, deps)` helper. Additive and in service of BQ-3, but outside the letter.
+- `grounding.ts` is pure directly but not transitively: it imports `headLineRanges` from
+  `assemble.ts`, which imports `platform/prompt.js`.
