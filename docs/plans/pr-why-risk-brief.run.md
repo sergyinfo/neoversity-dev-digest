@@ -2,7 +2,7 @@
 
 Started: 2026-08-27 · Branch: `lesson-5-lab` (→ `origin/lesson-5-lab/sdd-pipeline`) · Mode: **multi-agent**
 Plan: `docs/plans/pr-why-risk-brief.md` · Spec: `server/specs/brief/01-pr-why-risk-brief.md` (`approved`)
-Ceiling: **16** — raised from the plan's 13 at the Stage 1→2 boundary (see Decisions)
+Ceiling: **17** — the plan declared 13; raised to 16 at the Stage 1→2 boundary and to 17 for the post-verification fix round (see Decisions)
 
 ## Stages
 
@@ -11,11 +11,11 @@ Ceiling: **16** — raised from the plan's 13 at the Stage 1→2 boundary (see D
 | 0 | Intake & baseline | **done** | Tree committed clean (`4033e72`, `b5cd777`); pnpm blocker cleared; baseline green on both packages |
 | 1 | Implementation (T0–T8) | **done** | all 9 tracks landed, `3c02235`…`c55d8a9` |
 | 2 | Review ×3 | **done** | R2 boundary: no crossings · R3 correctness: 3 major, 8 minor · R4 security: 0 blocker, 4 minor |
-| 3 | Fix loop (2 rounds) | **done** | Round 1 `c89c2d0` (F1–F5) · Round 2 `0bb0088` (F6–F7) + the D-16 spec revision. Nothing contested |
-| 4 | Verification | **done** | 18/20 steps verified · 28/35 ACs verified · **AC-7a not built** · 5 e2e-dependent rows `cannot tell` |
-| 5 | Land | pending | — |
+| 3 | Fix loop (3 rounds) | **done** | Round 1 `c89c2d0` (F1–F5) · Round 2 `0bb0088` (F6–F7) + the D-16 spec revision · Round 3 `c73761c` (F8–F9, post-verification). Nothing contested in any round |
+| 4 | Verification | **done** | 18/20 steps · 28/35 ACs at the time. AC-7a and AC-28 were then closed by round 3; the e2e rows are settled by CI |
+| 5 | Land | **done** | Committed per track and per round; `engineering-insights` was owned by T8 and deliberately not re-run |
 
-**Agent count: 16 / 16 — at the ceiling.** One `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2, two fix rounds, one `specreator` for the D-16 revision, one `plan-verifier`. (A 17th launch died on an API error before writing anything and is not counted — it did no work.)
+**Agent count: 17 / 17 — at the ceiling.** One `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2, two fix rounds, one `specreator` for the D-16 revision, one `plan-verifier`, and one more `implementer` for round 3. (A 17th launch died on an API error before writing anything and is not counted — it did no work.)
 
 ### Tracks
 
@@ -130,6 +130,21 @@ Recorded for `/retro`.
 | B | **`./scripts/e2e.sh` gives 5/8 locally, and it is pre-existing.** `04`, `05` and `09` all fail on the same `find text … click` step. T7 stashed its own changes and reproduced the identical failure on `04`/`05` against the unmodified tree. Cause: a real GitHub PAT in `~/.devdigest/secrets.json` (outside the repo) makes every PR-list load do a ~1 s doomed call to `api.github.com`, and `find` does not poll the way `wait` does. CI has no PAT. **Flow `09` passed twice end to end when isolated with a throwaway `wait` that was deliberately not committed** — so the committed flow is unproven as part of a full local run, and CI is what settles it |
 
 ## Open at the end
+
+### CLOSED by fix round 3 (`c73761c`)
+
+Items 1 and 2 below were the verification's two open criteria. Both are now closed;
+the text is kept because the *reason* each was missed is the durable part.
+
+**AC-7a** — `drop_order_exhausted` is recorded on the assembler's `break` and carried
+into the stored provenance record. The fixture is a real 900-hunk patch measured with
+the real tokenizer, not a stubbed counter: ~12 `cl100k_base` tokens per hunk after
+REQ-3 strips the bodies, so ~670 hunks in one file exhausts the budget. Two negative
+tests keep the flag falsifiable.
+
+**AC-28** — seeded PR #613 carries `pr_files` and no `pr_brief` row, and flow `09`
+asserts the empty state and its generate control without pressing it. Proven by a DB
+query after the run: zero `pr_brief` rows for #613.
 
 ### 1. AC-7a is not built — the one place work is done and its criterion still fails
 
