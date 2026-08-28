@@ -266,7 +266,13 @@ export class BriefService {
     // The allow-list is built from the files that actually REACHED the model:
     // a file dropped by the budget was never observed by it, and allowing a
     // reference to it would ground a claim in something the model never saw.
-    const listed = files.slice(0, assembly.files_listed).map((f) => f.path);
+    // Passed as files rather than as paths so the hunk ranges a
+    // `review_focus[].line` is checked against are read from the very patches
+    // the assembler rendered `@@` headers from — a separately-derived list
+    // could disagree with what the model was shown.
+    const listed = files
+      .slice(0, assembly.files_listed)
+      .map((f) => ({ path: f.path, patch: f.patch }));
     const grounded = filterReferences(
       result.data,
       buildAllowList(listed, state.blastDegraded ? null : state.blast),
@@ -476,9 +482,20 @@ export class BriefService {
     const issueRef = refs.find(
       (r) => r.kind === 'github' && r.owner === repoRef.owner && r.repo === repoRef.name,
     );
-    const issueContent = resolved.find(
-      (r) => r.kind === 'github' && r.source.endsWith(`#${issueRef?.issueNumber}`),
-    );
+    // Matched on the WHOLE source (`owner/repo#N`), never on the `#N` suffix.
+    // `fetchOne` builds that source at `intent/references.ts:288`, and
+    // `parseReferences` emits GitHub-URL refs BEFORE short `#N` refs — so a body
+    // reading "Closes #123. Upstream: https://github.com/other/repo/issues/123"
+    // puts `other/repo#123` first in `resolved`, and a suffix test picks the
+    // foreign repo's title and body for a `## Linked issue #123` block that
+    // claims to be ours. It also digests the wrong text into the `linked_issue`
+    // fingerprint component, so editing the real issue stops moving it.
+    const issueSource = issueRef?.issueNumber
+      ? `${repoRef.owner}/${repoRef.name}#${issueRef.issueNumber}`
+      : null;
+    const issueContent = issueSource
+      ? resolved.find((r) => r.kind === 'github' && r.source === issueSource)
+      : undefined;
     const issue =
       issueRef?.issueNumber && issueContent
         ? {

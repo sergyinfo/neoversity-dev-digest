@@ -21,6 +21,7 @@
   "overlap": "{count} overlap",
   "generate": "Generate brief",
   "regenerate": "Regenerate",
+  "generatedAt": "Generated {when}",
   "outOfDate": {
     "label": "May be out of date",
     "moved": "{inputs} changed since this brief was generated."

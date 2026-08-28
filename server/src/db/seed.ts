@@ -388,7 +388,16 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         },
       ],
       // First entry MUST stay src/config.ts:12 — S19's flow clicks it by its
-      // accessible name to exercise the Files-tab jump (BQ-5/A).
+      // accessible name to exercise the Files-tab jump (BQ-5/A). Its line is
+      // grounded: the seeded `src/config.ts` patch above is `@@ -1,9 +1,13 @@`,
+      // so head line 12 falls inside a hunk.
+      //
+      // The other two entries carry NO line, because the two files they name are
+      // seeded without a `patch` (see the pr_files insert above) — with no hunk
+      // ranges there is nothing a line could be grounded against, and
+      // `filterReferences` would clear one on a real assembly. A demo that shows
+      // a line production would strip is the same three-way disagreement the
+      // `path:line` file_refs used to have.
       review_focus: [
         {
           file: 'src/config.ts',
@@ -397,12 +406,12 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         },
         {
           file: 'src/middleware/ratelimit.ts',
-          line: 61,
+          line: null,
           reason: 'Limiter fails open when Redis is unreachable',
         },
         {
           file: 'src/api/public/webhooks.ts',
-          line: 22,
+          line: null,
           reason: 'Webhook signature checked after the body is consumed',
         },
       ],

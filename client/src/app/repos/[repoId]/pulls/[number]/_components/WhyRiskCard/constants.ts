@@ -82,13 +82,41 @@ export function middleTruncate(text: string, max: number = PATH_MAX_CHARS): stri
 /**
  * Split a `file_refs` entry into a path and an optional line.
  *
- * The contract types it as a bare string (`contracts/brief.ts`), and the
- * assembler emits both `path` and `path:line`. A trailing `:<digits>` is the
- * only form treated as a line; anything else stays part of the path, so a
- * filename containing a colon is opened rather than mangled.
+ * The contract types it as a bare string (`contracts/brief.ts`) and both forms
+ * reach us: the model writes `path` from the changed-file list and `path:line`
+ * by copying the dependency map, which renders a caller as
+ * `called from src/server.ts:12 (bootstrap)`. Server-side grounding splits the
+ * same suffix before matching the path against its allow-list
+ * (`brief/grounding.ts` `groundedRef`), so a surviving entry's PATH is always
+ * observed — the line is the model's, carried through unchecked, because a
+ * caller's line is valid at the index's tree rather than at the PR head.
+ *
+ * A trailing `:<digits>` is the only form treated as a line; anything else stays
+ * part of the path, so a filename containing a colon is opened rather than
+ * mangled.
  */
 export function splitFileRef(ref: string): { file: string; line?: number } {
   const m = /^(.*):(\d+)$/.exec(ref);
   if (!m) return { file: ref };
   return { file: m[1]!, line: Number(m[2]) };
+}
+
+/**
+ * The brief's `generated_at` as an absolute local timestamp — never a relative
+ * phrase.
+ *
+ * Spec §10 requires this and D-1a is why: an edited linked issue or reference
+ * document moves only the REMOTE half of the state fingerprint, which the read
+ * path never recomputes, so the card shows such a brief as current. What dates
+ * it is this timestamp and the provenance list, and "just now" would actively
+ * assert the freshness D-1a knowingly cannot check. An absent or unparseable
+ * value renders "—" rather than "Invalid Date": missing is missing.
+ *
+ * `toLocaleString` matches the shipped `CommentCard.formatWhen`; the component
+ * is a client component, so there is no server render to disagree with.
+ */
+export function formatGeneratedAt(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
 }

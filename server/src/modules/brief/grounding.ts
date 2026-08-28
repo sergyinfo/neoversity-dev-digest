@@ -18,14 +18,16 @@
  *
  * Two asymmetries in the allow-list are deliberate (spec §10):
  *
- *  - `review_focus[].file` may be a **changed file only**. A review-focus entry
- *    is a click through to the Files changed tab, and only a changed file exists
- *    there; its line numbers are valid at the PR head, whereas a blast caller's
- *    line is valid at `indexed_sha` — a different tree, which can lag the head
- *    by tens of commits (`server/INSIGHTS.md`, 2026-08-23).
+ *  - `review_focus[].file` may be a **changed file only**, and its `line` must
+ *    fall inside one of that file's `@@` ranges. A review-focus entry is a click
+ *    through to the Files changed tab, and only a changed file exists there; its
+ *    line numbers are valid at the PR head, whereas a blast caller's line is
+ *    valid at `indexed_sha` — a different tree, which can lag the head by tens
+ *    of commits (`server/INSIGHTS.md`, 2026-08-23).
  *  - `risks[].file_refs` may span the WHOLE allow-list, because "this breaks a
  *    caller in `src/server.ts`" is exactly the kind of risk the blast map exists
- *    to make sayable.
+ *    to make sayable — and may carry a `:line` suffix, which is checked as a
+ *    path and then left alone for the reasons on `groundedRef` below.
  *
  * And one thing the allow-list deliberately does not contain: **anything a
  * reference document mentions**. `buildAllowList` takes no documents parameter
@@ -35,6 +37,7 @@
  */
 import { RiskSeverity, type Risk } from '@devdigest/shared';
 import type { BlastResponse } from '../blast/contract.js';
+import { headLineRanges, type HeadLineRange } from './assemble.js';
 import type { BriefDocument, ModelBrief, ReviewFocus } from './contract.js';
 
 /**
@@ -48,6 +51,30 @@ export interface AllowList {
   readonly all: ReadonlySet<string>;
   /** The PR's changed file paths. Only these may appear in `review_focus`. */
   readonly changedFiles: ReadonlySet<string>;
+  /**
+   * Per changed file, the head-side line spans of its hunks — the same ranges
+   * the assembler rendered into the prompt. A `review_focus[].line` outside
+   * every span of its own file is not grounded.
+   *
+   * A file with no readable patch (binary, unfetched) maps to an EMPTY array,
+   * and that is not the same as "unconstrained": the model was shown no ranges
+   * for it either, so it has no grounds for any line on it.
+   */
+  readonly headLines: ReadonlyMap<string, readonly HeadLineRange[]>;
+}
+
+/**
+ * One changed file as grounding needs it: the path, and the hunk-only patch the
+ * assembler rendered `@@` ranges from.
+ *
+ * Structural, like `BlastGrounding` below — `assemble.ts`'s `BriefChangedFile`
+ * satisfies it, so the service hands over the very files that reached the model
+ * rather than a separately-derived list that could disagree with them.
+ */
+export interface ChangedFileGrounding {
+  path: string;
+  /** The stored hunk-only patch. Null for a binary or unfetched file. */
+  patch?: string | null;
 }
 
 /**
@@ -73,13 +100,16 @@ export type BlastGrounding = Pick<BlastResponse, 'map' | 'prior_prs'>;
  * a narrower brief, not a broken one.
  */
 export function buildAllowList(
-  changedFiles: readonly string[],
+  changedFiles: readonly ChangedFileGrounding[],
   blast: BlastGrounding | null | undefined,
 ): AllowList {
   const changed = new Set<string>();
-  for (const path of changedFiles) {
-    const p = path.trim();
-    if (p) changed.add(p);
+  const headLines = new Map<string, readonly HeadLineRange[]>();
+  for (const file of changedFiles) {
+    const p = file.path.trim();
+    if (!p) continue;
+    changed.add(p);
+    headLines.set(p, headLineRanges(file.patch));
   }
 
   const all = new Set<string>(changed);
@@ -95,7 +125,7 @@ export function buildAllowList(
     }
   }
 
-  return { all, changedFiles: changed };
+  return { all, changedFiles: changed, headLines };
 }
 
 function add(set: Set<string>, value: string | null | undefined): void {
@@ -107,11 +137,44 @@ export interface GroundingResult {
   /** The model's document with every ungrounded reference removed. */
   document: BriefDocument;
   /**
-   * How many references were discarded — dropped `file_refs` entries plus
-   * dropped `review_focus` entries. REQ-15 records it, and it is the earliest
+   * How many references were discarded — dropped `file_refs` entries, dropped
+   * `review_focus` entries, and `review_focus` lines cleared for falling
+   * outside their file's hunks. REQ-15 records it, and it is the earliest
    * signal that the prompt or the model has gone wrong.
    */
   discarded: number;
+}
+
+/**
+ * Split a trailing `:<line>` off a `file_refs` entry.
+ *
+ * The dependency map the model is shown renders a caller as
+ * `called from src/server.ts:12 (bootstrap)` (`blast/summary.ts:76`), so a model
+ * copying a reference straight out of it writes `src/server.ts:12`. Matching
+ * that whole string against an allow-list of BARE paths discarded it and counted
+ * it into `discarded_refs` — the prompt taught the model a form the filter then
+ * rejected. The line is kept on the surviving entry: the client parses it back
+ * out (`WhyRiskCard/constants.ts` `splitFileRef`) to open the file at it.
+ *
+ * The full string is tested against the allow-list FIRST, so an endpoint or a
+ * cron whose own name ends in `:<digits>` is matched as itself rather than
+ * being split into a path it is not.
+ *
+ * The line is NOT range-checked, unlike `review_focus[].line`: a `file_refs`
+ * entry may name a blast caller, whose line is valid at `indexed_sha` — a
+ * different tree from the PR head, with no hunks of ours to check it against.
+ */
+function groundedRef(ref: string, allow: AllowList): boolean {
+  if (allow.all.has(ref)) return true;
+  const m = /^(.*):(\d+)$/.exec(ref);
+  return m !== null && allow.all.has(m[1]!);
+}
+
+/** Whether `line` falls inside one of that file's head-side hunk spans. */
+function lineIsInAHunk(file: string, line: number, allow: AllowList): boolean {
+  if (!Number.isSafeInteger(line)) return false;
+  const ranges = allow.headLines.get(file) ?? [];
+  return ranges.some((r) => line >= r.start && line <= r.end);
 }
 
 /**
@@ -128,20 +191,34 @@ export interface GroundingResult {
  * changed file: the entry IS a pointer at a file, and a pointer at nothing is
  * not an entry. Nothing is substituted in its place — when every entry goes,
  * the list is empty and the card renders its empty state (AC-15).
+ *
+ * An entry whose file IS a changed file but whose `line` falls outside every
+ * hunk of it has the LINE CLEARED and the entry kept. Dropping it whole would
+ * be the wrong trade in the opposite direction from the paragraph above: here
+ * the file really is a grounded pointer and `reason` is real prose about it, so
+ * discarding the entry over a bad line would let a mis-numbered line suppress a
+ * "read this first". Clearing the line removes exactly the ungrounded part and
+ * keeps the grounded one — the same lower-only shape as REQ-7's risk cap, and
+ * why `reason` is never rendered beside a line we could not stand behind.
  */
 export function filterReferences(brief: ModelBrief, allow: AllowList): GroundingResult {
   let discarded = 0;
 
   const risks: Risk[] = brief.risks.map((risk) => {
-    const file_refs = risk.file_refs.filter((ref) => allow.all.has(ref));
+    const file_refs = risk.file_refs.filter((ref) => groundedRef(ref, allow));
     discarded += risk.file_refs.length - file_refs.length;
     return { ...risk, file_refs };
   });
 
-  const review_focus: ReviewFocus[] = brief.review_focus.filter((entry) =>
-    allow.changedFiles.has(entry.file),
-  );
-  discarded += brief.review_focus.length - review_focus.length;
+  const kept = brief.review_focus.filter((entry) => allow.changedFiles.has(entry.file));
+  discarded += brief.review_focus.length - kept.length;
+
+  const review_focus: ReviewFocus[] = kept.map((entry) => {
+    if (entry.line == null) return entry;
+    if (lineIsInAHunk(entry.file, entry.line, allow)) return entry;
+    discarded++;
+    return { ...entry, line: null };
+  });
 
   return {
     document: {

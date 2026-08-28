@@ -58,9 +58,18 @@ export interface SkippedSource {
   reason: string;
 }
 
-/** One thing to read first, most important first. `file` is always a CHANGED
-    file and `line` always sits inside a hunk at the PR head — grounding
-    guarantees both, so a focus item is always linkable on the Files tab. */
+/**
+ * One thing to read first, most important first.
+ *
+ * `file` is always a CHANGED file: grounding drops an entry whose file is not
+ * one, so a focus item is always linkable on the Files tab.
+ *
+ * `line`, when present, sits inside one of that file's hunks at the PR head.
+ * Grounding does not drop the entry to achieve that — it CLEARS a line that
+ * falls outside every hunk and keeps the pointer at the file
+ * (`brief/grounding.ts` `filterReferences`). So `null` is a normal value and
+ * means "no grounded line", never "the line is unknown but probably fine".
+ */
 export interface ReviewFocus {
   file: string;
   line?: number | null;

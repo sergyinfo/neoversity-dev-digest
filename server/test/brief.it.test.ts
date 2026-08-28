@@ -603,6 +603,90 @@ d('L05 PR Why + Risk Brief (Testcontainers pg)', () => {
     await a.close();
   });
 
+  /**
+   * The linked issue is the SAME-REPO `#N`, matched on its whole source.
+   *
+   * `parseReferences` emits GitHub-URL refs before short `#N` refs, so a body
+   * that links our `#123` and cites another repo's issue of the same number
+   * puts `other/repo#123` first in `resolved`. Finding the issue content by
+   * `source.endsWith('#123')` therefore picked the FOREIGN repo: the
+   * `## Linked issue #123` block carried another project's title and body under
+   * our number, the real issue was demoted to a plain reference document, and
+   * the `linked_issue` fingerprint component digested the wrong text — so
+   * editing the actual linked issue stopped moving it.
+   */
+  it('takes the linked issue from THIS repo when another repo has the same number', async () => {
+    // Keyed by `owner/name#n`, unlike `stubGithub`: the whole point here is that
+    // the two repos answer differently.
+    const issues: Record<string, { title: string; body: string; state: string }> = {};
+    const githubByRepo = {
+      getIssue: async (repo: { owner: string; name: string }, n: number) => {
+        const key = `${repo.owner}/${repo.name}#${n}`;
+        return {
+          number: n,
+          title: issues[key]?.title ?? `Issue ${key}`,
+          body: issues[key]?.body ?? '',
+          state: issues[key]?.state ?? 'open',
+        };
+      },
+      getPullRequest: async () => {
+        throw new Error('not a pull request');
+      },
+    } as never;
+
+    const { app, llm } = appWith({ github: githubByRepo });
+    const a = await app;
+    const { repo, pr } = await setupPr({
+      body: 'Closes #123. Upstream: https://github.com/other/repo/issues/123',
+    });
+
+    issues[`${repo.owner}/${repo.name}#123`] = {
+      title: 'Our limiter drops legitimate bursts',
+      body: 'Seen on the payments API at 900 rps.',
+      state: 'open',
+    };
+    issues['other/repo#123'] = {
+      title: 'Unrelated upstream parser bug',
+      body: 'A YAML anchor crashes the loader.',
+      state: 'closed',
+    };
+
+    const first = (
+      await a.inject({ method: 'POST', url: `/pulls/${pr.id}/brief` })
+    ).json<BriefResponse>();
+
+    // The `## Linked issue #123` block is OURS. The foreign issue is not gone —
+    // it resolved as a reference document — so the assertion that matters is
+    // which text sits under the linked-issue heading.
+    const input = userInputs(llm);
+    const linkedBlock = input.slice(input.indexOf('## Linked issue #123'));
+    expect(linkedBlock).toContain('Our limiter drops legitimate bursts');
+    expect(linkedBlock).toContain('Seen on the payments API at 900 rps.');
+    expect(linkedBlock.slice(0, linkedBlock.indexOf('##', 2))).not.toContain(
+      'Unrelated upstream parser bug',
+    );
+
+    // The foreign reference is not lost — it is a reference DOCUMENT, which is
+    // the other half of the same claim and the one the provenance can state
+    // exactly. Pre-fix this was inverted: the foreign issue was the linked
+    // issue and OURS was demoted to a document.
+    expect(first.references_used).toEqual(['other/repo#123']);
+    expect(first.references_used).not.toContain(`${repo.owner}/${repo.name}#123`);
+
+    // Our issue is therefore in the `linked_issue` fingerprint component and in
+    // no other — `documents` cannot contain it. So editing it moving the remote
+    // half at the next assembly is proof that `linked_issue` digests OUR text.
+    issues[`${repo.owner}/${repo.name}#123`]!.body =
+      'Seen on the payments API at 9000 rps, and it is now taking the database with it.';
+    const second = (
+      await a.inject({ method: 'POST', url: `/pulls/${pr.id}/brief` })
+    ).json<BriefResponse>();
+    expect(second.state_fingerprint.remote).not.toBe(first.state_fingerprint.remote);
+    expect(second.state_fingerprint.local).toBe(first.state_fingerprint.local);
+    expect(second.references_used).toEqual(['other/repo#123']);
+    await a.close();
+  });
+
   // ─────────────────────────────────────────────── refusals and reads ──
 
   /** AC-22 — no stored brief is an explicit outcome, not a 404 and not a wrapper. */

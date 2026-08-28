@@ -25,6 +25,7 @@ import {
   MAX_RISKS,
   MOVED_INPUT_LABEL,
   RISK_META,
+  formatGeneratedAt,
   middleTruncate,
   splitFileRef,
 } from "./constants";
@@ -217,8 +218,12 @@ function RiskRow({
       <p style={s.riskBody}>{risk.explanation}</p>
       {risk.file_refs.length > 0 && (
         <div style={s.refRow}>
-          {risk.file_refs.map((ref) => (
-            <FileRef key={ref} refText={ref} onOpenFile={onOpenFile} />
+          {/* `:${i}` because nothing dedupes `file_refs` — the contract is a
+              bare `z.array(z.string())` and grounding only filters it, so the
+              same path twice would collide on a bare `key={ref}`. Both sibling
+              lists in this file key the same way. */}
+          {risk.file_refs.map((ref, i) => (
+            <FileRef key={`${ref}:${i}`} refText={ref} onOpenFile={onOpenFile} />
           ))}
         </div>
       )}
@@ -301,6 +306,13 @@ function Footer({
           {brief.tokens_in ?? 0} → {brief.tokens_out ?? 0}
         </span>
       )}
+      {/* Not decorative (spec §10, F-9): under D-1a an edited linked issue or
+          reference document leaves this card reading as CURRENT, and this
+          timestamp plus the provenance list are the only two things that date
+          the brief. Absolute, never "just now" — see `formatGeneratedAt`. */}
+      <span style={s.meta} title={brief.generated_at || undefined}>
+        {t("generatedAt", { when: formatGeneratedAt(brief.generated_at) })}
+      </span>
       <span style={s.spacer} />
       <Button
         kind="ghost"

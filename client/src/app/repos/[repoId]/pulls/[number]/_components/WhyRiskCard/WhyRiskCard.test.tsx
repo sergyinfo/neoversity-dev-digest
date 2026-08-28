@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import messages from "../../../../../../../../messages/en/brief.json";
 import type { BriefResponse } from "@/lib/hooks/brief";
 import { WhyRiskCard } from "./WhyRiskCard";
+import { formatGeneratedAt } from "./constants";
 
 /**
  * The load-bearing behaviours here are the ones that would quietly mislead a
@@ -184,6 +185,70 @@ describe("WhyRiskCard — a rendered brief", () => {
     expect(screen.getByText("deepseek/deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.getByText("$0.0013")).toBeInTheDocument();
     expect(screen.getByText("4821 → 640")).toBeInTheDocument();
+  });
+
+  /**
+   * `generated_at` is load-bearing, not decorative. Under D-1a an edited linked
+   * issue or reference document moves only the REMOTE half of the state
+   * fingerprint, which the read path never recomputes — so the card shows such
+   * a brief as CURRENT, and spec §10/F-9 make this timestamp plus the
+   * provenance list the only two things that date it. A relative phrase would
+   * assert exactly the freshness we cannot check.
+   */
+  describe("generated_at", () => {
+    it("renders the timestamp, as an absolute date and never a relative phrase", () => {
+      const { container } = renderCard({ data: BRIEF });
+
+      // Compared against the same locale formatting the card uses, so the
+      // assertion does not depend on the machine's timezone.
+      const when = new Date(BRIEF.generated_at).toLocaleString();
+      expect(screen.getByText(`Generated ${when}`)).toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/just now|ago|moments/i);
+      // The exact ISO value stays available on hover.
+      expect(document.querySelector(`[title="${BRIEF.generated_at}"]`)).not.toBeNull();
+    });
+
+    it("renders an em dash when there is no timestamp, never an Invalid Date", () => {
+      const { container } = renderCard({ data: { ...BRIEF, generated_at: "" } });
+
+      expect(screen.getByText("Generated —")).toBeInTheDocument();
+      expect(container.textContent).not.toContain("Invalid Date");
+      expect(container.textContent).not.toMatch(/just now|ago|moments/i);
+    });
+
+    it("formatGeneratedAt maps every missing or unusable value to an em dash", () => {
+      expect(formatGeneratedAt(null)).toBe("—");
+      expect(formatGeneratedAt(undefined)).toBe("—");
+      expect(formatGeneratedAt("")).toBe("—");
+      expect(formatGeneratedAt("not a date")).toBe("—");
+      expect(formatGeneratedAt("2026-08-27T10:00:00.000Z")).toBe(
+        new Date("2026-08-27T10:00:00.000Z").toLocaleString(),
+      );
+    });
+  });
+
+  it("keys duplicated file_refs uniquely, so React does not collide them", () => {
+    // Nothing dedupes `file_refs`: the contract is a bare `z.array(z.string())`
+    // and server-side grounding only filters it, so the same path twice is a
+    // shape the card must render. A bare `key={ref}` warns and reconciles the
+    // two entries as one.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderCard({
+        data: {
+          ...BRIEF,
+          risks: [{ ...BRIEF.risks[0]!, file_refs: ["src/mw/rate-limit.ts:31", "src/mw/rate-limit.ts:31"] }],
+        },
+      });
+
+      expect(
+        screen.getAllByRole("button", { name: "src/mw/rate-limit.ts:31" }),
+      ).toHaveLength(2);
+      const warnings = spy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+      expect(warnings).not.toMatch(/same key/i);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("says so when there are no risks rather than rendering an empty block", () => {

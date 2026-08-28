@@ -123,16 +123,57 @@ export interface AssembledBriefInput {
  * cannot reach the model input.
  */
 export function hunkRanges(patch: string | null | undefined): string[] {
+  // Re-rendered from the captured numbers, NOT sliced from the line: git appends
+  // the enclosing function's signature after the closing `@@`, and that is
+  // source code.
+  return parseHunks(patch).map(
+    (h) => `@@ -${h.oldStart},${h.oldLen} +${h.newStart},${h.newLen} @@`,
+  );
+}
+
+/** An inclusive line span on the PR-head side of one hunk. */
+export interface HeadLineRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * The same hunks as `hunkRanges`, as inclusive head-side line spans.
+ *
+ * Exists so REQ-6 grounding can check a `review_focus[].line` against exactly
+ * the ranges the model was shown, without re-parsing the rendered strings. Both
+ * functions read one `parseHunks` so the check and the prompt can never
+ * disagree about where a hunk is.
+ *
+ * A pure-deletion hunk (`+c,0`) yields an EMPTY span (`end < start`), which is
+ * correct: no line exists there at the head, so no line may be cited there.
+ */
+export function headLineRanges(patch: string | null | undefined): HeadLineRange[] {
+  return parseHunks(patch).map((h) => ({ start: h.newStart, end: h.newStart + h.newLen - 1 }));
+}
+
+interface Hunk {
+  oldStart: number;
+  oldLen: number;
+  newStart: number;
+  newLen: number;
+}
+
+/** `@@ -a,b +c,d @@` per hunk. An omitted length is `1`, per the diff format. */
+function parseHunks(patch: string | null | undefined): Hunk[] {
   if (!patch) return [];
-  const ranges: string[] = [];
+  const hunks: Hunk[] = [];
   for (const line of patch.split('\n')) {
     const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (!m) continue;
-    // Re-rendered, NOT sliced from the line: git appends the enclosing
-    // function's signature after the closing `@@`, and that is source code.
-    ranges.push(`@@ -${m[1]},${m[2] ?? '1'} +${m[3]},${m[4] ?? '1'} @@`);
+    hunks.push({
+      oldStart: Number(m[1]),
+      oldLen: m[2] === undefined ? 1 : Number(m[2]),
+      newStart: Number(m[3]),
+      newLen: m[4] === undefined ? 1 : Number(m[4]),
+    });
   }
-  return ranges;
+  return hunks;
 }
 
 /** Paths, counts and hunk ranges. Never a changed line. */

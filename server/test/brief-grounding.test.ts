@@ -7,6 +7,7 @@ import {
   capRiskLevel,
   filterReferences,
   type BlastGrounding,
+  type ChangedFileGrounding,
 } from '../src/modules/brief/grounding.js';
 
 /**
@@ -17,8 +18,24 @@ import {
  * place of what was removed.
  */
 
-/** The PR's changed files. `src/api/users.ts` is the near-match trap for AC-13. */
-const CHANGED = ['src/config.ts', 'src/api/users.ts', 'src/modules/brief/contract.ts'];
+/**
+ * The PR's changed files, with the hunk-only patches the assembler renders `@@`
+ * headers from — the same shape `BriefChangedFile` has, because a
+ * `review_focus[].line` is grounded against exactly those ranges.
+ * `src/api/users.ts` is the near-match trap for AC-13.
+ *
+ * Head-side ranges, which the line assertions below turn on:
+ *   src/config.ts               10..13
+ *   src/api/users.ts            40..47
+ *   src/modules/brief/contract.ts  no patch → NO grounded line at all
+ */
+const CHANGED: ChangedFileGrounding[] = [
+  { path: 'src/config.ts', patch: '@@ -10,3 +10,4 @@ export function loadConfig() {\n   port: 3000,\n+  limit: 100,' },
+  { path: 'src/api/users.ts', patch: '@@ -40,6 +40,8 @@ async function list(req) {\n   const rows = [];\n+  const page = req.query.page;' },
+  // Binary or never fetched: the model was shown no ranges for it either.
+  { path: 'src/modules/brief/contract.ts', patch: null },
+];
+const CHANGED_PATHS = CHANGED.map((f) => f.path);
 
 /**
  * A blast map whose caller file `src/server.ts` is deliberately NOT in the diff
@@ -74,7 +91,7 @@ describe('buildAllowList — §10 union', () => {
   it('unions changed files with every blast arm', () => {
     const allow = buildAllowList(CHANGED, BLAST);
 
-    for (const path of CHANGED) expect(allow.all.has(path)).toBe(true);
+    for (const path of CHANGED_PATHS) expect(allow.all.has(path)).toBe(true);
     expect(allow.all.has('src/server.ts')).toBe(true); // downstream caller file
     expect(allow.all.has('GET /pulls/:id')).toBe(true); // endpoints_affected
     expect(allow.all.has('nightly-digest')).toBe(true); // crons_affected
@@ -83,7 +100,7 @@ describe('buildAllowList — §10 union', () => {
 
   it('keeps changed files as a narrower tier than the whole list', () => {
     const allow = buildAllowList(CHANGED, BLAST);
-    expect([...allow.changedFiles].sort()).toEqual([...CHANGED].sort());
+    expect([...allow.changedFiles].sort()).toEqual([...CHANGED_PATHS].sort());
     // The caller file is grounded for a RISK but is not a changed file, because
     // its line numbers are valid at indexed_sha, not at the PR head.
     expect(allow.changedFiles.has('src/server.ts')).toBe(false);
@@ -91,7 +108,7 @@ describe('buildAllowList — §10 union', () => {
 
   it('a degraded or absent map leaves the changed-file list as the whole allow-list', () => {
     const allow = buildAllowList(CHANGED, null);
-    expect([...allow.all].sort()).toEqual([...CHANGED].sort());
+    expect([...allow.all].sort()).toEqual([...CHANGED_PATHS].sort());
     expect(allow.all.has('src/server.ts')).toBe(false);
   });
 
@@ -178,7 +195,7 @@ describe('filterReferences — REQ-6', () => {
     expect(result.document.review_focus).toEqual([]);
     expect(result.discarded).toBe(2);
     // No changed file was quietly promoted into the gap.
-    for (const path of CHANGED) {
+    for (const path of CHANGED_PATHS) {
       expect(JSON.stringify(result.document.review_focus)).not.toContain(path);
     }
   });
@@ -208,6 +225,167 @@ describe('filterReferences — REQ-6', () => {
     expect(result.document.risks).toHaveLength(1);
     expect(result.document.risks[0]!.title).toBe('Still worth saying');
     expect(result.document.risks[0]!.file_refs).toEqual([]);
+  });
+
+  /**
+   * The dependency map the model is shown renders a caller as
+   * `called from src/server.ts:12 (bootstrap)` (`blast/summary.ts:76`), and the
+   * system prompt never says a reference must be bare — so a model copying one
+   * writes `src/server.ts:12`. Matching that against an allow-list of bare paths
+   * threw the whole reference away and counted it as a discard: the prompt
+   * taught a form the filter rejected, the seeded demo brief shipped exactly
+   * that form, and the client already parses it back out.
+   */
+  describe('a `path:line` file_ref is grounded on its PATH', () => {
+    it('keeps a caller reference copied out of the dependency map, line and all', () => {
+      const result = filterReferences(
+        brief({ risks: [risk({ file_refs: ['src/server.ts:12'] })] }),
+        allow,
+      );
+
+      // The line survives untouched — the client splits it back off to open the
+      // file at it — and nothing was counted as discarded.
+      expect(result.document.risks[0]!.file_refs).toEqual(['src/server.ts:12']);
+      expect(result.discarded).toBe(0);
+    });
+
+    it('keeps a changed-file reference with a line', () => {
+      const result = filterReferences(
+        brief({ risks: [risk({ file_refs: ['src/config.ts:12'] })] }),
+        allow,
+      );
+      expect(result.document.risks[0]!.file_refs).toEqual(['src/config.ts:12']);
+      expect(result.discarded).toBe(0);
+    });
+
+    it('still discards one whose PATH was never observed', () => {
+      // Splitting the suffix widens the FORM accepted, never the set of files.
+      const result = filterReferences(
+        brief({ risks: [risk({ file_refs: ['src/ghost.ts:9', 'src/api/user.ts:1'] })] }),
+        allow,
+      );
+      expect(result.document.risks[0]!.file_refs).toEqual([]);
+      expect(result.discarded).toBe(2);
+      expect(JSON.stringify(result.document)).not.toContain('src/api/users.ts');
+    });
+
+    it('matches an endpoint as itself before trying to split it', () => {
+      // `GET /pulls/:id` has a colon but no trailing digits; a cron named
+      // `nightly-digest` has neither. Both are allow-listed as whole strings.
+      const result = filterReferences(
+        brief({ risks: [risk({ file_refs: ['GET /pulls/:id', 'nightly-digest'] })] }),
+        allow,
+      );
+      expect(result.document.risks[0]!.file_refs).toEqual(['GET /pulls/:id', 'nightly-digest']);
+      expect(result.discarded).toBe(0);
+    });
+  });
+
+  /**
+   * The system prompt requires `review_focus[].line` to fall inside one of that
+   * file's `@@` ranges, and `hooks/brief.ts` tells every future client reader
+   * that grounding guarantees it. Nothing enforced it: the file was checked and
+   * the line passed through, so a model-invented line was rendered beside a
+   * grounded path and borrowed its credibility.
+   */
+  describe('review_focus[].line is grounded against the file\'s hunks', () => {
+    it('keeps a line that falls inside a hunk', () => {
+      const result = filterReferences(
+        brief({ review_focus: [{ file: 'src/config.ts', line: 12, reason: 'the new key' }] }),
+        allow,
+      );
+      expect(result.document.review_focus).toEqual([
+        { file: 'src/config.ts', line: 12, reason: 'the new key' },
+      ]);
+      expect(result.discarded).toBe(0);
+    });
+
+    it('CLEARS a line outside every hunk and keeps the entry', () => {
+      // src/config.ts's only hunk is 10..13. 400 is not in it.
+      const result = filterReferences(
+        brief({ review_focus: [{ file: 'src/config.ts', line: 400, reason: 'invented' }] }),
+        allow,
+      );
+
+      // The pointer at the file is grounded and the reason is real prose about
+      // it, so the entry stays — only the part we cannot stand behind goes.
+      expect(result.document.review_focus).toEqual([
+        { file: 'src/config.ts', line: null, reason: 'invented' },
+      ]);
+      expect(result.discarded).toBe(1);
+    });
+
+    it('clears a line just past the end of a hunk, not just a wild one', () => {
+      // 10..13 inclusive: 13 is in, 14 is out. Off-by-one is the realistic case.
+      const inRange = filterReferences(
+        brief({ review_focus: [{ file: 'src/config.ts', line: 13, reason: 'r' }] }),
+        allow,
+      );
+      expect(inRange.document.review_focus[0]!.line).toBe(13);
+
+      const outOfRange = filterReferences(
+        brief({ review_focus: [{ file: 'src/config.ts', line: 14, reason: 'r' }] }),
+        allow,
+      );
+      expect(outOfRange.document.review_focus[0]!.line).toBeNull();
+    });
+
+    it('grounds each line against its OWN file, not against any hunk anywhere', () => {
+      // 42 is inside src/api/users.ts (40..47) and outside src/config.ts (10..13).
+      const result = filterReferences(
+        brief({
+          review_focus: [
+            { file: 'src/api/users.ts', line: 42, reason: 'kept' },
+            { file: 'src/config.ts', line: 42, reason: 'cleared' },
+          ],
+        }),
+        allow,
+      );
+
+      expect(result.document.review_focus).toEqual([
+        { file: 'src/api/users.ts', line: 42, reason: 'kept' },
+        { file: 'src/config.ts', line: null, reason: 'cleared' },
+      ]);
+      expect(result.discarded).toBe(1);
+    });
+
+    it('grounds NO line on a changed file with no readable patch', () => {
+      // No patch means no ranges — and the model was shown none either, so it
+      // had no grounds for a line. "Cannot verify" is not "assume grounded".
+      const result = filterReferences(
+        brief({
+          review_focus: [
+            { file: 'src/modules/brief/contract.ts', line: 3, reason: 'why' },
+          ],
+        }),
+        allow,
+      );
+      expect(result.document.review_focus).toEqual([
+        { file: 'src/modules/brief/contract.ts', line: null, reason: 'why' },
+      ]);
+      expect(result.discarded).toBe(1);
+    });
+
+    it('leaves an entry that never claimed a line alone, and counts nothing', () => {
+      const result = filterReferences(
+        brief({ review_focus: [{ file: 'src/config.ts', line: null, reason: 'no line' }] }),
+        allow,
+      );
+      expect(result.document.review_focus).toEqual([
+        { file: 'src/config.ts', line: null, reason: 'no line' },
+      ]);
+      expect(result.discarded).toBe(0);
+    });
+
+    it('drops the entry, not just the line, when the FILE is ungrounded', () => {
+      // The two rules do not blur: a pointer at nothing is not an entry.
+      const result = filterReferences(
+        brief({ review_focus: [{ file: 'src/server.ts', line: 12, reason: 'the caller' }] }),
+        allow,
+      );
+      expect(result.document.review_focus).toEqual([]);
+      expect(result.discarded).toBe(1);
+    });
   });
 
   it('leaves what / why untouched — grounding filters references, not prose', () => {
