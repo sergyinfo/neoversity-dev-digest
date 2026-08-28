@@ -111,6 +111,22 @@ export interface AssembledBriefInput {
   references_used: string[];
   /** Whole items left out, by source. Never by content. */
   dropped_items: SkippedSource[];
+  /**
+   * REQ-4a: the drive-down loop ran out of things it was willing to drop and
+   * the input was STILL over budget, so the call was issued over budget.
+   *
+   * Recorded as its own fact rather than inferred, because neither of the two
+   * fields a reader would reach for says it. A non-empty `dropped_items` means
+   * items were dropped, not that the order was exhausted — the common case
+   * drops one document and lands comfortably under budget. And an
+   * `estimated_input_tokens` above `TOKEN_BUDGET` is the CONSEQUENCE of the
+   * floor, not the fact itself: it cannot distinguish "we gave up" from "we
+   * never needed to try", which is exactly what §14's assumption that this case
+   * is rare has to be falsifiable against.
+   *
+   * `false` on every other path, including one where nothing was ever dropped.
+   */
+  drop_order_exhausted: boolean;
   /** How many changed-file entries were listed. */
   files_listed: number;
   /**
@@ -374,10 +390,18 @@ export function assembleBriefInput(input: AssembleInput): AssembledBriefInput {
   let user = renderUser(input, w);
   let estimate = measure(BRIEF_SYSTEM_PROMPT + user, input.countTokens);
 
+  // REQ-4a's fact. Set only on the `break` below, so it means "the order ran
+  // out with the input still over budget" and nothing weaker.
+  let dropOrderExhausted = false;
   while (estimate > TOKEN_BUDGET) {
     const drop = dropNext(w, input.files);
-    // Nothing left we are willing to drop — complete anyway (REQ-5).
-    if (!drop) break;
+    // Nothing left we are willing to drop — complete anyway (REQ-5), and
+    // RECORD that we did (REQ-4a). The loop condition is the other half of the
+    // fact: we only reach here while `estimate > TOKEN_BUDGET`.
+    if (!drop) {
+      dropOrderExhausted = true;
+      break;
+    }
     dropped.push(drop);
     user = renderUser(input, w);
     estimate = measure(BRIEF_SYSTEM_PROMPT + user, input.countTokens);
@@ -398,6 +422,7 @@ export function assembleBriefInput(input: AssembleInput): AssembledBriefInput {
     inputs_used,
     references_used: w.references.map((r) => r.source),
     dropped_items: dropped,
+    drop_order_exhausted: dropOrderExhausted,
     files_listed: w.filesListed,
     // `renderChangedFiles`'s own denominator, floored at what was actually
     // listed so a `files_count` that lags the stored rows can never make the

@@ -425,6 +425,78 @@ d('L05 PR Why + Risk Brief (Testcontainers pg)', () => {
     await a.close();
   });
 
+  /**
+   * AC-7a — the half a pure-function test cannot reach: at REQ-5's floor the
+   * one structured call is STILL issued and no error is raised.
+   *
+   * `brief-assemble.test.ts` proves the assembler records the exhausted order
+   * with the real tokenizer; it cannot prove the service went on to call the
+   * model, because it never calls one. This does: 900 scattered hunks in a
+   * SINGLE changed file, no references, no linked issue, one blast symbol —
+   * nothing droppable — and the route answers 200 with exactly one completion.
+   *
+   * The patch is hunks only, no `diff --git`/`---`/`+++` preamble, matching
+   * what `pr_files.patch` actually stores (`server/INSIGHTS.md` 2026-08-23).
+   */
+  it('issues exactly one call, over budget and without error, at the drop-order floor', async () => {
+    const HUNKS = 900;
+    const patch = Array.from({ length: HUNKS }, (_, i) => {
+      const line = i * 4 + 1;
+      return `@@ -${line},3 +${line},4 @@ export function handler${i}(req) {\n   const before = 1;\n+  const added${i} = 2;\n-  const removed = 3;`;
+    }).join('\n');
+
+    const { app, llm } = appWith();
+    const a = await app;
+    const { pr } = await setupPr({
+      // No `#N` and no document path: nothing for the resolver to find, so the
+      // drop order starts already at its floor.
+      body: 'Rewrites the reconciler line by line.',
+      files: [
+        { path: 'src/legacy/reconcile.ts', additions: HUNKS, deletions: HUNKS, patch },
+      ],
+    });
+
+    const res = await a.inject({ method: 'POST', url: `/pulls/${pr.id}/brief` });
+    // No error is raised: the over-budget input is sent, not refused.
+    expect(res.statusCode).toBe(200);
+    // …and exactly one structured call was issued for it.
+    expect(llm.calls.filter((c) => c.method === 'completeStructured')).toHaveLength(1);
+
+    const [row] = await pg.handle.db.select().from(t.prBrief).where(eq(t.prBrief.prId, pr.id));
+    const provenance = row!.provenance as {
+      estimated_input_tokens: number;
+      drop_order_exhausted?: boolean;
+      dropped_items: { source: string; reason: string }[];
+    };
+    // REQ-4a's two recorded facts, in the STORED record — the estimate, which
+    // is above the budget, and that the order ran out, which the estimate
+    // cannot say on its own.
+    expect(provenance.estimated_input_tokens).toBeGreaterThan(8000);
+    expect(provenance.drop_order_exhausted).toBe(true);
+    // Measured over what was really sent, by the container's real tokenizer.
+    expect(userInputs(llm)).toContain('src/legacy/reconcile.ts');
+    // REQ-3 holds at the floor too: headers, never the lines between them.
+    expect(userInputs(llm)).not.toContain('const added0');
+    await a.close();
+  });
+
+  /**
+   * The negative half, in the same place: an assembly that fitted records the
+   * fact as `false`, never as absent. Without this the flag could be hard-wired
+   * true and every assertion above would still pass.
+   */
+  it('records the drop order as NOT exhausted for an ordinary assembly', async () => {
+    const { app } = appWith();
+    const a = await app;
+    const { pr } = await setupPr();
+
+    expect((await a.inject({ method: 'POST', url: `/pulls/${pr.id}/brief` })).statusCode).toBe(200);
+
+    const [row] = await pg.handle.db.select().from(t.prBrief).where(eq(t.prBrief.prId, pr.id));
+    expect((row!.provenance as { drop_order_exhausted?: boolean }).drop_order_exhausted).toBe(false);
+    await a.close();
+  });
+
   // ──────────────────────────────────────── freshness and the cache ──
 
   /** AC-18 — every input unchanged ⇒ the stored brief and no second call. */

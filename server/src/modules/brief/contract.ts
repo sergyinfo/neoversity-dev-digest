@@ -248,6 +248,21 @@ export const BriefProvenance = z.object({
    */
   blast_state: BriefBlastState.optional(),
   changed_files: ChangedFileCoverage.optional(),
+  /**
+   * REQ-4a — the drop order was exhausted with the input still over budget, so
+   * the one call was issued OVER the 8 000-token budget.
+   *
+   * `.optional()` for the same reason as the pair above, and it must stay that
+   * way: a required field here makes every `pr_brief` row written before it
+   * unparseable, and an unparseable provenance is served as "nothing is known
+   * about this brief". Absent therefore means NOT RECORDED — never `false`.
+   *
+   * It is not derivable from its neighbours, which is why it is its own field:
+   * `dropped_items` being non-empty says items were dropped, not that the order
+   * ran out, and `estimated_input_tokens > 8000` is the consequence rather than
+   * the fact. §7 *Observability* asks for the fact.
+   */
+  drop_order_exhausted: z.boolean().optional(),
 });
 export type BriefProvenance = z.infer<typeof BriefProvenance>;
 

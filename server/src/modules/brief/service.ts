@@ -318,6 +318,9 @@ export class BriefService {
         prId,
         model: result.model,
         estimatedInputTokens: assembly.estimated_input_tokens,
+        // REQ-4a: an over-budget call is a fact worth finding by grep, not only
+        // by reading a stored row back. A boolean, so no input content.
+        dropOrderExhausted: assembly.drop_order_exhausted,
         tokensIn: result.tokensIn,
         tokensOut: result.tokensOut,
         discardedRefs: grounded.discarded,

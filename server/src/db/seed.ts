@@ -453,6 +453,91 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
     });
   }
 
+  // ---- PR #613 (dependency bump) — the PR with NO brief -------------------
+  //
+  // WHY A SECOND PR EXISTS AT ALL. AC-28 is "a PR with no stored brief shows
+  // the empty state and a generate control", and it cannot be asserted on #482,
+  // which is seeded WITH a brief above. One PR could not carry both states, so
+  // the flow needed a second row rather than a second fixture.
+  //
+  // WHAT IT IS DELIBERATELY NOT, because this seed is shared demo data that
+  // flows 01, 02, 04, 05 and 09 all read:
+  //   - not a second REPO. Flow 01 follows the root redirect to the FIRST repo
+  //     and flows 02/04/05/09 assume the demo repo is the only one
+  //     (`e2e/README.md` "Precondition: a freshly-seeded DB"). A second repo
+  //     would make that redirect ambiguous; a second PR inside this one cannot.
+  //   - not a title that can collide. Four flows locate the demo PR with
+  //     `find text "Add rate limiting to public API endpoints" click`, and
+  //     `find text` matches a SUBSTRING. 'Bump pino to 9.4.0' shares no
+  //     substring with that, nor with any other flow's `wait --text` value
+  //     ('Pull Requests', 'Security Reviewer', 'request changes', '10 findings',
+  //     'Suggestion', 'Hardcoded Stripe secret key in commit', 'src/config.ts',
+  //     'WHY & RISK', 'Adds a token-bucket rate limiter', 'RISK LEVEL', 'High',
+  //     'stripeSecretKey', 'Add a repository', 'API Keys', 'Feature Models').
+  //   - not order-sensitive. `GET /repos/:id/pulls` declares no `orderBy`
+  //     (`modules/pulls/routes.ts:87-90`), so no flow may depend on which row
+  //     is first — and none does: every one locates its PR by text, never by
+  //     position.
+  //   - not zero-stat. The list route back-fills diff stats from GitHub for any
+  //     PR whose additions, deletions and files_count are all 0
+  //     (`pulls/routes.ts:96-118`). On a machine with a real PAT that is a
+  //     doomed per-PR round trip on every list load, which is exactly the
+  //     latency `e2e/INSIGHTS.md` 2026-08-28 blames for the flaky `find text`
+  //     step. Real counts keep this row out of that loop.
+  //
+  // It gets `pr_files` because a PR with none is refused with 422 on the
+  // assembly path — the wrong path for AC-28, which is about the READ path
+  // finding no brief. No `pr_brief`, no `pr_intent`, no review and no findings:
+  // "no brief" is the whole point of the fixture, and a review here would put a
+  // second run on a page flow 04 counts findings on.
+  let [bumpPr] = await db
+    .select()
+    .from(t.pullRequests)
+    .where(and(eq(t.pullRequests.repoId, repoId), eq(t.pullRequests.number, 613)));
+  if (!bumpPr) {
+    [bumpPr] = await db
+      .insert(t.pullRequests)
+      .values({
+        workspaceId,
+        repoId,
+        number: 613,
+        title: 'Bump pino to 9.4.0',
+        author: 'dev.okonkwo',
+        branch: 'chore/bump-pino',
+        base: 'main',
+        headSha: 'f7e6d5c4b3a2',
+        additions: 3,
+        deletions: 3,
+        filesCount: 1,
+        status: 'needs_review',
+        body: 'Routine dependency bump. No behaviour change expected.',
+      })
+      .returning();
+
+    // Hunks only — no `diff --git`/`---`/`+++` header lines, for the same
+    // reason as #482's patch above (server/INSIGHTS.md 2026-08-23).
+    await db.insert(t.prFiles).values([
+      {
+        prId: bumpPr!.id,
+        path: 'package.json',
+        additions: 3,
+        deletions: 3,
+        patch: [
+          '@@ -18,9 +18,9 @@',
+          '   "dependencies": {',
+          '     "fastify": "5.2.1",',
+          '-    "pino": "9.3.2",',
+          '-    "pino-pretty": "11.2.2",',
+          '-    "zod": "3.23.8"',
+          '+    "pino": "9.4.0",',
+          '+    "pino-pretty": "11.3.0",',
+          '+    "zod": "3.23.8"',
+          '   },',
+        ].join('\n'),
+      },
+    ]);
+  }
+
   // ---- built-in agents (the three starter presets) ----
   // Prompt bodies live in ./seed-prompts.ts (mirrored in docs/agent-prompts/*.md).
   const seedAgents: Array<typeof t.agents.$inferInsert> = [

@@ -249,6 +249,7 @@ describe('buildProvenance — normalisation', () => {
     inputs_used: ['diff', 'intent', 'diff'] as never,
     references_used: ['docs/a.md', 'docs/a.md'],
     dropped_items: [],
+    drop_order_exhausted: false,
     files_listed: 1,
     files_total: 1,
   };
@@ -289,6 +290,23 @@ describe('buildProvenance — normalisation', () => {
     });
     expect(priced.cost_usd).toBe(0);
     expect(priced.tokens_in).toBe(0);
+  });
+
+  it('carries REQ-4a’s exhausted-order fact through to the record', () => {
+    // Required on the writer input (`AssembledBriefInput`) and optional on the
+    // schema, so no caller can omit it while every row written before the field
+    // still parses. Both halves are asserted: what a floor assembly records,
+    // and that an ordinary one records the negative rather than nothing.
+    const at = (drop_order_exhausted: boolean) =>
+      buildProvenance({
+        assembly: { ...emptyAssembly, drop_order_exhausted },
+        blast_state: 'ok',
+        references_skipped: [],
+        discarded_refs: 0,
+      }).drop_order_exhausted;
+
+    expect(at(true)).toBe(true);
+    expect(at(false)).toBe(false);
   });
 
   it('clamps a source long enough to be a payload instead of recording it', () => {

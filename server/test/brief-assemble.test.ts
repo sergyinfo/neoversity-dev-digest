@@ -10,6 +10,7 @@ import {
 } from '../src/modules/brief/assemble.js';
 import {
   BRIEF_SYSTEM_PROMPT,
+  BUDGET_REASON,
   MAX_BLAST_SYMBOLS,
   MAX_FILES_LISTED,
   TOKEN_BUDGET,
@@ -381,5 +382,155 @@ describe('inputs_used reflects what actually reached the model', () => {
 
   it('carries the diff statistics from pull_requests, which are ours and trusted', () => {
     expect(assembleBriefInput(input()).user).toContain('3 changed file(s), +6/-1 line(s)');
+  });
+});
+
+/**
+ * REQ-4a / AC-7a — the floor case, measured with the REAL tokenizer.
+ *
+ * WHY THESE DO NOT REUSE `countTokens: () => 1_000_000`. That counter proves the
+ * `break` runs; it cannot prove a real diff can reach it, because no input on
+ * earth satisfies it. AC-7a names an input that does: a SINGLE changed file
+ * whose re-rendered `@@` headers alone exceed the budget. `scatteredHunks`
+ * builds it the way spec §6 describes — "every fourth line of a large file
+ * edited" — and `TiktokenTokenizer` counts it, so the assertion is that
+ * `cl100k_base` over this patch really does blow past 8 000.
+ *
+ * The patch is HUNKS ONLY, with no `diff --git`/`---`/`+++` preamble, because
+ * that is what `pr_files.patch` stores (`server/INSIGHTS.md` 2026-08-23).
+ */
+describe('REQ-4a / AC-7a — the drop order runs out and the fact is recorded', () => {
+  const tokenizer = new TiktokenTokenizer();
+  const realCount = (t: string) => tokenizer.count(t);
+
+  /**
+   * One file, `n` small scattered hunks — every fourth line edited. The bodies
+   * are here on purpose: REQ-3 throws them away, so what is left to measure is
+   * exactly the `n` re-rendered headers, which is AC-7a's premise.
+   *
+   * 900 hunks lands the estimate near 10 800 `cl100k_base` tokens: over the
+   * budget with margin, so the test does not sit on a tokenizer-version cliff.
+   */
+  function scatteredHunks(n: number): string {
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const line = i * 4 + 1;
+      out.push(`@@ -${line},3 +${line},4 @@ export function handler${i}(req) {`);
+      out.push('   const before = 1;');
+      out.push(`+  const added${i} = 2;`);
+      out.push('-  const removed = 3;');
+    }
+    return out.join('\n');
+  }
+
+  const HUNK_COUNT = 900;
+  const bigFile: BriefChangedFile = {
+    path: 'src/legacy/reconcile.ts',
+    additions: HUNK_COUNT,
+    deletions: HUNK_COUNT,
+    patch: scatteredHunks(HUNK_COUNT),
+  };
+  /** AC-7a's given: one blast symbol, so the symbol floor is already at rest. */
+  const oneSymbol: BlastResponse = {
+    ...BLAST,
+    map: {
+      ...BLAST.map,
+      downstream: [
+        {
+          symbol: 'reconcile',
+          callers: [{ name: 'bootstrap', file: 'src/server.ts', line: 12 }],
+          endpoints_affected: [],
+          crons_affected: [],
+        },
+      ],
+    },
+  };
+
+  /** AC-7a exactly: one file, no references, no linked issue, one symbol. */
+  const atTheFloor = () =>
+    assembleBriefInput(
+      input({
+        blast: oneSymbol,
+        files: [bigFile],
+        stats: { additions: HUNK_COUNT, deletions: HUNK_COUNT, files_count: 1 },
+        issue: null,
+        references: [],
+        countTokens: realCount,
+      }),
+    );
+
+  it('a real single-file diff can exceed the budget with nothing left to drop', () => {
+    const assembled = atTheFloor();
+    // The premise, asserted rather than assumed: this is the tokenizer's own
+    // count of system + user, not a stub's.
+    expect(assembled.estimated_input_tokens).toBe(
+      tokenizer.count(BRIEF_SYSTEM_PROMPT + assembled.user),
+    );
+    expect(assembled.estimated_input_tokens).toBeGreaterThan(TOKEN_BUDGET);
+  });
+
+  it('records the exhausted drop order as its own fact', () => {
+    expect(atTheFloor().drop_order_exhausted).toBe(true);
+  });
+
+  it('is at the floor with nothing dropped for budget — so the flag is the only signal', () => {
+    const assembled = atTheFloor();
+    // AC-7a's given starts AT the floor, so no budget drop was even possible.
+    // This is precisely why `dropped_items` cannot stand in for the fact: it is
+    // empty here while the input went out over budget.
+    expect(assembled.dropped_items.filter((d) => d.reason === BUDGET_REASON)).toEqual([]);
+    expect(assembled.files_listed).toBe(1);
+    expect(assembled.user).toContain('src/legacy/reconcile.ts');
+    // REQ-3 still holds at the floor: headers only, no source line.
+    expect(assembled.user).toContain('@@ -1,3 +1,4 @@');
+    expect(assembled.user).not.toContain('const added0');
+    expect(assembled.user).not.toContain('handler0');
+  });
+
+  it('drives the WHOLE order down first, then records exhaustion', () => {
+    // The same file, but with everything droppable in front of it: the order
+    // runs to its end under the real tokenizer and still cannot fit.
+    const assembled = assembleBriefInput(
+      input({
+        blast: { ...BLAST, map: { ...BLAST.map, downstream: [
+          { symbol: 'reconcile', callers: [{ name: 'a', file: 'src/a.ts', line: 1 }], endpoints_affected: [], crons_affected: [] },
+          { symbol: 'lowest', callers: [], endpoints_affected: ['GET /x'], crons_affected: [] },
+        ] } },
+        files: [bigFile, ...FILES],
+        stats: { additions: HUNK_COUNT, deletions: HUNK_COUNT, files_count: 4 },
+        countTokens: realCount,
+      }),
+    );
+
+    expect(assembled.drop_order_exhausted).toBe(true);
+    expect(assembled.dropped_items.filter((d) => d.reason === BUDGET_REASON).map((d) => d.source)).toEqual([
+      'docs/plans/rate-limit.md',
+      'linked-issue #482',
+      'blast-symbol lowest',
+      'assets/logo.png',
+      'src/api/users.ts',
+      'src/config.ts',
+    ]);
+    // Both floors held: the file that could not be dropped is the one left.
+    expect(assembled.files_listed).toBe(1);
+    expect(assembled.inputs_used).toEqual(['intent', 'blast', 'diff']);
+    expect(assembled.estimated_input_tokens).toBeGreaterThan(TOKEN_BUDGET);
+  });
+
+  it('is FALSE when the drive-down succeeded — the flag has to be falsifiable', () => {
+    // §14's assumption ("the floor case is rare") is only checkable if the flag
+    // distinguishes the two outcomes. An assembly that dropped one document and
+    // landed under budget must NOT set it, even though `dropped_items` is
+    // non-empty and the drive-down loop ran.
+    const budgeted = (t: string) => (t.includes('Rate limit plan') ? TOKEN_BUDGET + 1 : 10);
+    const assembled = assembleBriefInput(input({ countTokens: budgeted }));
+
+    expect(assembled.dropped_items).not.toEqual([]);
+    expect(assembled.estimated_input_tokens).toBeLessThanOrEqual(TOKEN_BUDGET);
+    expect(assembled.drop_order_exhausted).toBe(false);
+  });
+
+  it('is FALSE when the input fitted and nothing was ever dropped', () => {
+    expect(assembleBriefInput(input()).drop_order_exhausted).toBe(false);
   });
 });

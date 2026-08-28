@@ -153,5 +153,9 @@ export function buildProvenance(input: ProvenanceInput): BriefProvenance {
     // numbers and a fixed label, so the safety contract above is untouched.
     blast_state: input.blast_state,
     changed_files: { listed: assembly.files_listed, total: assembly.files_total },
+    // REQ-4a. Read off the assembly, where it is REQUIRED, and written on every
+    // record this function produces — so the field is optional on the way back
+    // out (old rows still parse) and impossible to omit on the way in.
+    drop_order_exhausted: assembly.drop_order_exhausted,
   });
 }
