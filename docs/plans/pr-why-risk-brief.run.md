@@ -9,11 +9,42 @@ Ceiling: **17** — the plan declared 13; raised to 16 at the Stage 1→2 bounda
 | # | Stage | Status | Artefact / result |
 |---|---|---|---|
 | 0 | Intake & baseline | **done** | Tree committed clean (`4033e72`, `b5cd777`); pnpm blocker cleared; baseline green on both packages |
-| 1 | Implementation (T0–T8) | **done** | all 9 tracks landed, `3c02235`…`c55d8a9` |
+| 1 | Implementation (T0–T8) | **done** | all 9 tracks landed, `3c02235`…`53f5a75` |
 | 2 | Review ×3 | **done** | R2 boundary: no crossings · R3 correctness: 3 major, 8 minor · R4 security: 0 blocker, 4 minor |
-| 3 | Fix loop (3 rounds) | **done** | Round 1 `c89c2d0` (F1–F5) · Round 2 `0bb0088` (F6–F7) + the D-16 spec revision · Round 3 `c73761c` (F8–F9, post-verification). Nothing contested in any round |
+| 3 | Fix loop (3 rounds) | **done** | Round 1 `b73e812` (F1–F5) · Round 2 `9307805` (F6–F7) + the D-16 spec revision · Round 3 `fac7796` (F8–F9, post-verification). Nothing contested in any round |
 | 4 | Verification | **done** | 18/20 steps · 28/35 ACs at the time. AC-7a and AC-28 were then closed by round 3; the e2e rows are settled by CI |
 | 5 | Land | **done** | Committed per track and per round; `engineering-insights` was owned by T8 and deliberately not re-run |
+
+### History rewrite before the push
+
+GitHub push protection rejected the branch: the seeded Stripe fixture strings
+(a Stripe-shaped secret key and publishable key) match its Stripe-key pattern. **This is exactly what
+R4 predicted** — it recorded them as verifiably fabricated (wrong length for either real
+Stripe format) but "realistic enough to trip GitHub push protection or a partner secret
+scanner, which costs someone a revocation ticket for a string that was never a key."
+
+Allow-listing them through the unblock URL was rejected in favour of the fix R4 named: the
+values are now `sk_live_EXAMPLE_NOT_A_REAL_KEY_0000` and friends, applied across the whole
+branch with `git filter-branch` so the pattern never enters the history at all. The seeded
+patch keeps its shape, so `src/config.ts:12` is still the secret line that flow `09` and the
+seeded finding both point at, and `09` asserts the identifier `stripeSecretKey`, not the
+value. Server suite re-run after the rewrite: 408 passed.
+
+A second location surfaced on the next push attempt and needed the same treatment:
+`server/test/brief-provenance.test.ts:24` planted a Stripe-prefixed literal as one
+of the three secrets it proves the provenance record cannot leak. The `sk_live_` prefix was
+decorative — the string's job is to be unique, not to look like Stripe — so it became
+`PLANTED-SECRET-PR-BODY-NEVER-LOGGED` and the test's assertions are unchanged.
+
+**The lesson is the sweep, not the string.** The first pass fixed only what the reviewer had
+named, and the second block cost another round trip. A branch-wide grep for every
+secret-shaped literal (the Stripe, AWS and GitHub token prefixes) found
+both in one pass and should have run first. `server/test/prompt-log.test.ts:11` carries a
+third such literal and was left alone: it is already in pushed history, so scanning does not
+re-flag it, and rewriting it would touch commits this branch does not own.
+
+Commits from T2 onward took new SHAs; the table above and below carries the new ones.
+Pre-rewrite state is kept at `backup/pre-secret-rewrite` locally.
 
 **Agent count: 17 / 17 — at the ceiling.** One `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2, two fix rounds, one `specreator` for the D-16 revision, one `plan-verifier`, and one more `implementer` for round 3. (A 17th launch died on an API error before writing anything and is not counted — it did no work.)
 
@@ -23,13 +54,13 @@ Ceiling: **17** — the plan declared 13; raised to 16 at the Stage 1→2 bounda
 |---|---|---|---|---|
 | T0 | Contract, `pr_brief` widening, migration `0013_legal_mimic.sql` | 1 | **done** | `3c02235` |
 | T1 | Reference resolver `{resolved, skipped}` + `dropWholeItems`, `container.blast` | 2 | **done** | `99cc43f` |
-| T2 | `grounding` / `fingerprint` / `assemble` / `provenance` | 3 | **done** | `1890b2c` |
-| T3 | Repository, service, routes, `modules/index.ts`, `brief.it.test.ts` | 4 | **done** | `0b0c07d` |
+| T2 | `grounding` / `fingerprint` / `assemble` / `provenance` | 3 | **done** | `18c8322` |
+| T3 | Repository, service, routes, `modules/index.ts`, `brief.it.test.ts` | 4 | **done** | `896d2f1` |
 | T4 | Client hook + `messages/en/brief.json` | 5 | **done** | `8065d5d` |
-| T5 | `WhyRiskCard` + Overview mount + the `page.tsx` wiring line | 6 | **done** | `8d7932f` |
-| T6 | Diff-viewer `focus` prop chain + `openFileFromBrief` | 7 | **done** | `f1e1e63` |
-| T7 | Seed row + `e2e/specs/09-pr-brief.flow.json` | 8 | **done** | `e0bb211` |
-| T8 | `doc-writer` → `INSIGHTS.md` | 9 | **done** | `c55d8a9` |
+| T5 | `WhyRiskCard` + Overview mount + the `page.tsx` wiring line | 6 | **done** | `c0b21f9` |
+| T6 | Diff-viewer `focus` prop chain + `openFileFromBrief` | 7 | **done** | `8c8677b` |
+| T7 | Seed row + `e2e/specs/09-pr-brief.flow.json` | 8 | **done** | `80a2b8b` |
+| T8 | `doc-writer` → `INSIGHTS.md` | 9 | **done** | `53f5a75` |
 
 ## Baseline (pre-existing failures — never blamed on this change)
 
@@ -131,7 +162,7 @@ Recorded for `/retro`.
 
 ## Open at the end
 
-### CLOSED by fix round 3 (`c73761c`)
+### CLOSED by fix round 3 (`fac7796`)
 
 Items 1 and 2 below were the verification's two open criteria. Both are now closed;
 the text is kept because the *reason* each was missed is the durable part.
