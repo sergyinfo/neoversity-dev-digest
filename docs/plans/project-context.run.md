@@ -11,7 +11,7 @@ Ceiling: **12** — the plan's counted envelope of 11, plus `doc-writer` added a
 |---|---|---|---|
 | 0 | Intake & baseline | **done** | Tree clean at `a8273db`; baseline captured before anything changed, all green |
 | 1 | Implementation (T0–T6) | **done** | all 7 tracks landed, `55a1639`…`aa7bf6c` |
-| 2 | Review ×3 | **in progress** | boundary: 1 major · correctness: **3 major, 3 minor** · security running |
+| 2 | Review ×3 | **done** | boundary: 1 major · correctness: 3 major, 3 minor · security: **1 BLOCKER**, 1 major, 5 minor |
 | 3 | Fix loop (≤2 rounds) | pending | — |
 | 4 | Verification | pending | — |
 | 5 | Land | pending | — |
@@ -59,6 +59,8 @@ what makes a later failure attributable.
 | C4 | code-review | minor | `usageCounts` splits its composite key on the **first** space (`repository.ts:282-287`), and paths may contain spaces. `docs/my notes.md` parses as `docs/my`, so a document in use renders "—" and a phantom bucket appears | 1 | open |
 | C5 | code-review | minor | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's `assembly.specs` does not. The demo artefact shows the exact heading-vs-`assembly.specs` conflation BQ-1 exists to prevent | 1 | open |
 | C6 | code-review | minor | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** — the `any` flag is dead code | 1 | open |
+| **S1** | **security-review** | **BLOCKER** | **The read gate enforces containment but not the allow-list.** The `.md` filter, the doc-directory allow-list and `EXCLUDED_DIRS` live **only inside `walkDir`**; neither `attach()` (`service.ts:113-177`) nor `readDoc()` (`discovery.ts:195-220`) applies any of them. Proved by executing the real module: `readDoc('.git/config')` returns `url = https://x-access-token:ghp_…@github.com/…`. That PAT is a **single global secret**, written verbatim into `.git/config` by `git clone` and never rewritten. Attach it, and on the next run it goes to the LLM provider **and** is persisted into `prompt_assembly`, which the trace drawer renders in full. `.env` and any source file read the same way | 1 | open |
+| S2 | security-review | **major** | The per-target cap does not bound per-run reads. `resolveForAgent` returns the agent's 20 **plus 20 per enabled linked skill**, and `linkSkill` is an unbounded upsert — so the real ceiling is `20 × (1 + N_skills)`, every one `stat`-ed, read and **tokenized before the budget drops anything**. 100 skills ≈ 2 020 reads, ~129 MB. Fires on the run **and** on the uncached projection route | 1 | open |
 | C7 | code-review | test quality | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string — as its "secret"; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; and `reviews.it.test.ts:750` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion | 1 | open |
 
 ## Decisions
