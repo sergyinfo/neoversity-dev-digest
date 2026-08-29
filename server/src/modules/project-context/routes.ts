@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
+import { MAX_ATTACHMENT_ORDER } from './constants.js';
 import { ProjectContextService } from './service.js';
 import {
   AttachmentInput,
@@ -44,15 +45,25 @@ import {
  * with the scoping done in SQL rather than after the fact.
  */
 
+/**
+ * `target_id` is a uuid for the same reason `IdParams` is
+ * (`_shared/schemas.ts:11`, fix-brief F9): it reaches
+ * `eq(t.agents.id, targetId)` against a `uuid` column, and a malformed value
+ * there is Postgres 22P02 surfacing through `app.ts:160-163` as a 500 that
+ * echoes the raw database message.
+ */
 const ListAttachmentsQuery = z.object({
   target_kind: AttachmentTargetKind,
-  target_id: z.string().min(1),
+  target_id: z.string().uuid(),
 });
 
-const ReorderBody = z.object({ order: z.number().int().min(0) });
+/** Bounded to the `integer` column's range — see `MAX_ATTACHMENT_ORDER` (F10). */
+const ReorderBody = z.object({
+  order: z.number().int().min(0).max(MAX_ATTACHMENT_ORDER),
+});
 
 /** The repository a projection is computed against (F2). See the route below. */
-const ProjectionQuery = z.object({ repo_id: z.string().min(1) });
+const ProjectionQuery = z.object({ repo_id: z.string().uuid() });
 
 export default async function projectContextRoutes(appBase: FastifyInstance) {
   const app = appBase.withTypeProvider<ZodTypeProvider>();

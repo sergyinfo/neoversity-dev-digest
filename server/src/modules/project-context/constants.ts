@@ -149,3 +149,42 @@ export const PROJECT_CONTEXT_HEADING = '## Project context';
 
 /** The engine's join between wrapped blocks (`prompt.ts:108`). Same caveat. */
 export const PROJECT_CONTEXT_BLOCK_SEPARATOR = '\n\n';
+
+// ---------------------------------------------------------------------------
+// Request-shape bounds (fix-brief F10)
+// ---------------------------------------------------------------------------
+
+/**
+ * Longest repo-relative path that may be ATTACHED — 512 characters.
+ *
+ * This is the `symbols.name` precedent applied to the other btree-indexed
+ * user-supplied string in this file's sibling schema. `MAX_INDEXED_NAME_LEN`
+ * (`db/schema/context.ts:23-34`) exists because "Postgres rejects any index row
+ * larger than ~2704 bytes", and `path` is the third column of
+ * `ctx_att_agent_repo_path_uq` (`db/schema/context.ts:210-215`) — the same
+ * failure, one table over. Unbounded, a multi-KB path is a 500 carrying a raw
+ * `index row size … exceeds btree version 4 maximum`; bounded, it is a 422 at
+ * the edge.
+ *
+ * 512 chars ≤ ~2 KB even if every character is a 4-byte code point, which
+ * leaves room for the two uuids and the row overhead — the same "comfortably
+ * safe" margin the 255 was chosen for, scaled to a value that is a path rather
+ * than an identifier. Real documentation paths are an order of magnitude
+ * shorter; a POSIX filename component maxes out at 255 on its own.
+ *
+ * Clamping (`clampIndexedName`) is deliberately NOT the model here: a truncated
+ * path names a different file, so this refuses rather than trims.
+ */
+export const MAX_ATTACHMENT_PATH_LEN = 512;
+
+/**
+ * Largest accepted `order` — `int4`'s maximum, because the column is
+ * `integer` (`db/schema/context.ts:200`).
+ *
+ * `order` is a position within a section of at most
+ * `MAX_ATTACHMENTS_PER_TARGET` documents, so any value near this bound is
+ * already meaningless; the point of the bound is only that the column's own
+ * limit is enforced where the caller can be told about it, instead of surfacing
+ * as a 500 with a raw `value out of range for type integer`.
+ */
+export const MAX_ATTACHMENT_ORDER = 2_147_483_647;

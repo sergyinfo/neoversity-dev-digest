@@ -241,12 +241,36 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     await app.close();
   });
 
-  it('AC-5 — traversal, absolute and null-byte paths are refused with the 422 envelope and never opened', async () => {
+  /**
+   * AC-5, and the half `routes-smoke.test.ts` cannot cover (fix-brief F7).
+   *
+   * A GENUINE traversal path is not refused by the schema — `'../../etc/passwd'`
+   * satisfies `z.string().min(1).max(...)` perfectly well. It is refused one
+   * layer in, by `attach()`'s `isSafeRelPath` gate, which needs a live handler
+   * and therefore a database. The smoke test's version used to send `path: ''`
+   * under a comment claiming a traversal path, so the case it named was never
+   * exercised anywhere.
+   *
+   * The `error.message` assertion is what names the layer: the schema branch of
+   * `app.ts` always says "Request validation failed", so a message of "Invalid
+   * document path" can only have come from the service. Both produce 422
+   * `validation_error`, which is why the status and code alone cannot tell them
+   * apart — and why asserting only those would leave a check that passes if the
+   * handler gate is deleted.
+   */
+  it('AC-5 — traversal, absolute and control-byte paths are refused by the handler gate, never opened, never stored', async () => {
     const app = await makeApp();
     const repo = await makeRepo(clone);
     const agent = await makeAgent(app, 'Traversal');
 
-    for (const path of ['../../../etc/passwd', '/etc/passwd', 'docs/a\u0000.md', 'C:\\win.ini']) {
+    for (const path of [
+      '../../../etc/passwd',
+      'docs/../../etc/passwd',
+      '/etc/passwd',
+      'docs/a\u0000.md',
+      'docs/a\nFAKE.md',
+      'C:\\win.ini',
+    ]) {
       const res = await attach(app, {
         path,
         repo_id: repo.id,
@@ -255,7 +279,17 @@ d('L05 project-context routes (Testcontainers pg)', () => {
       });
       expect(res.statusCode).toBe(422);
       expect(res.json().error.code).toBe('validation_error');
+      // The SERVICE refused it, not the schema.
+      expect(res.json().error.message).toBe('Invalid document path');
+      expect(res.json().error.details).toEqual({ path });
     }
+
+    // Nothing was written for any of them.
+    const stored = await pg.handle.db
+      .select()
+      .from(t.contextAttachments)
+      .where(eq(t.contextAttachments.agentId, agent.id));
+    expect(stored).toEqual([]);
 
     await app.close();
   });
@@ -371,6 +405,69 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     // Absent, not 0, for a document nothing uses — §10 says the consumer shows
     // "—", which a 0 would silently defeat.
     expect(list.files.find((f) => f.path === 'server/docs/b.md')!.used_by_count).toBeUndefined();
+
+    await app.close();
+  });
+
+  /**
+   * Fix-brief F8 — `used_by_count` for a path containing a SPACE.
+   *
+   * F8 was reported as a bug and is NOT one: `usageCounts` keys its
+   * distinct-agent set on `` `${path}\u0000${agentId}` `` and splits on the NUL,
+   * not on a space. The separator was written as a LITERAL 0x00 byte, which
+   * makes the whole file `data` to `file(1)` and binary to `grep(1)` — every
+   * match in `repository.ts` was silently suppressed — and renders as
+   * whitespace in a viewer, which is how it came to be read as a space. The
+   * byte is now an escape; the logic is unchanged.
+   *
+   * The test stays, because nothing asserted this before and the behaviour is
+   * one character away from the reported bug: split on a space instead and
+   * `docs/my notes.md` buckets under `docs/my`, `used_by_count` goes absent,
+   * and the row renders "—" for a document that IS in use — the
+   * absent-is-not-zero distinction AC-16 exists to protect, inverted. The
+   * second document shares everything before its first space, so a space split
+   * would also SUM the two into one bucket; hence two distinct counts asserted,
+   * not one.
+   *
+   * A dedicated clone, so the shared fixture's listing stays exactly as the
+   * other cases describe it.
+   */
+  it('F8 — a document whose path contains a space reports its own used_by_count', async () => {
+    const app = await makeApp();
+    const spaceClone = join(base, 'clone-space');
+    await mkdir(join(spaceClone, 'docs'), { recursive: true });
+    await writeFile(join(spaceClone, 'docs', 'my notes.md'), SMALL);
+    await writeFile(join(spaceClone, 'docs', 'my other.md'), SMALL);
+    const repo = await makeRepo(spaceClone);
+
+    const a1 = await makeAgent(app, 'Spacey A');
+    const a2 = await makeAgent(app, 'Spacey B');
+    for (const agent of [a1, a2]) {
+      const res = await attach(app, {
+        path: 'docs/my notes.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      expect(res.statusCode).toBe(201);
+    }
+    // Shares the prefix before the first space with the document above.
+    expect(
+      (
+        await attach(app, {
+          path: 'docs/my other.md',
+          repo_id: repo.id,
+          target_kind: 'agent',
+          target_id: a1.id,
+        })
+      ).statusCode,
+    ).toBe(201);
+
+    const list = ContextDocList.parse(
+      (await app.inject({ method: 'GET', url: `/repos/${repo.id}/context` })).json(),
+    );
+    expect(list.files.find((f) => f.path === 'docs/my notes.md')!.used_by_count).toBe(2);
+    expect(list.files.find((f) => f.path === 'docs/my other.md')!.used_by_count).toBe(1);
 
     await app.close();
   });

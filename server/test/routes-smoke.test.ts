@@ -2,6 +2,11 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/platform/config.js';
 import { MockGitHubClient, MockLLMProvider } from '../src/adapters/mocks.js';
+import { AttachmentInput } from '../src/modules/project-context/contract.js';
+import {
+  MAX_ATTACHMENT_ORDER,
+  MAX_ATTACHMENT_PATH_LEN,
+} from '../src/modules/project-context/constants.js';
 
 /**
  * No-DB route smoke tests via app.inject(). `/health` and the validation/error
@@ -104,20 +109,38 @@ describe('routes (no DB)', () => {
       expect(res.json().error.code).toBe('validation_error');
     }
 
-    // AC-5's envelope half: a traversal path is refused at the edge, in the
-    // fixed 422 shape, and never reaches a handler that could open it.
-    const bad = await app.inject({
-      method: 'POST',
-      url: '/context/attachments',
-      payload: {
-        path: '',
-        repo_id: 'r1',
-        target_kind: 'agent',
-        target_id: 'a1',
-      },
+    const REPO = '11111111-1111-4111-8111-111111111111';
+    const AGENT = '22222222-2222-4222-8222-222222222222';
+    const body = (over: Record<string, unknown>) => ({
+      path: 'docs/a.md',
+      repo_id: REPO,
+      target_kind: 'agent',
+      target_id: AGENT,
+      ...over,
     });
-    expect(bad.statusCode).toBe(422);
-    expect(bad.json().error.code).toBe('validation_error');
+    const post = (payload: Record<string, unknown>) =>
+      app.inject({ method: 'POST', url: '/context/attachments', payload });
+    const envelope = async (res: Awaited<ReturnType<typeof post>>) => {
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('validation_error');
+      // The SCHEMA layer, named: `app.ts`'s ZodError branch is the only one that
+      // produces this message, so this assertion cannot be satisfied by a
+      // handler-thrown `ValidationError` (which carries its own text).
+      expect(res.json().error.message).toBe('Request validation failed');
+    };
+
+    /**
+     * AC-5, the half `AttachmentInput` really owns (fix-brief F7).
+     *
+     * The empty path IS refused at the edge. A GENUINE traversal path is NOT:
+     * `'../../etc/passwd'` satisfies `z.string()` and is refused one layer in,
+     * by `attach()`'s `isSafeRelPath` gate — asserted against a live handler,
+     * with the layer named, in `project-context.it.test.ts` ("AC-5 — traversal
+     * ... never opened"). Every id here is a real uuid so that `path` is the
+     * only field under test; before F9 they were `'r1'`/`'a1'` and would now
+     * have made this pass for the wrong reason.
+     */
+    await envelope(await post(body({ path: '' })));
 
     // A target kind outside the closed enum is refused too.
     const kind = await app.inject({
@@ -125,6 +148,47 @@ describe('routes (no DB)', () => {
       url: '/context/attachments?target_kind=repo&target_id=x',
     });
     expect(kind.statusCode).toBe(422);
+
+    /**
+     * F9 — id-shaped fields are uuids, per the `IdParams` convention
+     * (`_shared/schemas.ts:11`): "an invalid id becomes a clean 422 instead of a
+     * downstream DB/500". Without it these strings reach `eq(t.agents.id, id)`
+     * against a `uuid` column, Postgres raises 22P02, and `app.ts:160-163`
+     * echoes `e.message` — the raw PG text — to the caller as a 500.
+     */
+    await envelope(await post(body({ repo_id: 'not-a-uuid' })));
+    await envelope(await post(body({ target_id: 'not-a-uuid' })));
+
+    for (const url of [
+      '/context/attachments?target_kind=agent&target_id=not-a-uuid',
+      `/agents/${AGENT}/context/projection?repo_id=not-a-uuid`,
+    ]) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('validation_error');
+      expect(res.json().error.message).toBe('Request validation failed');
+    }
+
+    /**
+     * F10 — `path` and `order` carry bounds, so the failure is a 422 at the edge
+     * rather than a 500 carrying a raw Postgres message.
+     *
+     * The precedent is `symbols.name` in the same schema file
+     * (`db/schema/context.ts:23-34`): a btree index row over ~2704 bytes is
+     * rejected by Postgres outright, and `path` is the third column of
+     * `ctx_att_agent_repo_path_uq`. `order` is an `integer` column, so anything
+     * past 2^31-1 overflows it. Neither is reachable through the UI; both are
+     * reachable through the API.
+     */
+    await envelope(await post(body({ path: `docs/${'a'.repeat(MAX_ATTACHMENT_PATH_LEN)}.md` })));
+    await envelope(await post(body({ order: MAX_ATTACHMENT_ORDER + 1 })));
+    await envelope(await post(body({ order: -1 })));
+    // ...and the bounds are not so tight that an ordinary attachment trips them.
+    expect(AttachmentInput.safeParse(body({ order: MAX_ATTACHMENT_ORDER })).success).toBe(true);
+    expect(
+      AttachmentInput.safeParse(body({ path: `docs/${'a'.repeat(MAX_ATTACHMENT_PATH_LEN - 9)}.md` }))
+        .success,
+    ).toBe(true);
 
     await app.close();
   });

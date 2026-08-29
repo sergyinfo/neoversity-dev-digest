@@ -227,8 +227,36 @@ describe('containment gate', () => {
     expect(isSafeRelPath('.devdigest/specs/prd.md')).toBe(true);
   });
 
+  /**
+   * Fix-brief F11. `isSafeRelPath` is the ONE gate a user-supplied path passes
+   * through untouched — it reaches `runLog.info(\`project context: skipped
+   * ${'${s.path}'} — ...\`)` and `RunTrace.specs_read` verbatim. A `\n` or `\r`
+   * in it forges an extra line in anything that reads those back as text.
+   *
+   * The structural defences hold today (`RunLogger.logFor` stores objects and
+   * the client renders through React), which is exactly why this is asserted
+   * here rather than left to them: the validation is the layer that is supposed
+   * to make the question moot.
+   */
+  it('F11 — refuses control characters, not merely NUL', () => {
+    for (const bad of [
+      'docs/a\nFAKE.md',
+      'docs/a\rFAKE.md',
+      'docs/a\tb.md',
+      'docs/a\u0007b.md',
+      'docs/a\u001bb.md',
+      'docs/a\u007fb.md',
+      'docs/a\0.md',
+    ]) {
+      expect(isSafeRelPath(bad)).toBe(false);
+    }
+    // Ordinary paths, including the one property a control-char rule must not
+    // over-reach into: spaces are legal in filenames (see F8).
+    expect(isSafeRelPath('docs/my notes.md')).toBe(true);
+  });
+
   it('AC-5 — a refused path is never opened', async () => {
-    for (const bad of ['../../../etc/passwd', '/etc/passwd', 'docs/a\0.md']) {
+    for (const bad of ['../../../etc/passwd', '/etc/passwd', 'docs/a\0.md', 'docs/a\nFAKE.md']) {
       expect(await safeDocPath(root, bad)).toBeNull();
       const read = await readDoc(root, bad);
       expect(read.ok).toBe(false);

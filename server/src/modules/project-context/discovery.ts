@@ -165,7 +165,15 @@ export async function resolveCloneRoot(clonePath: string | null | undefined): Pr
  */
 export function isSafeRelPath(p: string): boolean {
   if (!p || p.trim().length === 0) return false;
-  if (p.includes('\0')) return false;
+  // NUL and every other C0/C7F control byte (fix-brief F11). NUL alone was not
+  // enough: this is the ONE gate a user-supplied path crosses untouched on its
+  // way into `runLog.info(\`project context: skipped ${path} — ${reason}\`)`
+  // and `RunTrace.specs_read`, so a `\n` or `\r` here forges an extra line in
+  // any consumer that reads those back as text. The structural defences hold
+  // today — `RunLogger.logFor` stores objects, the client renders through React
+  // — but this is the layer whose job is to make that irrelevant. No legitimate
+  // documentation filename contains a control character.
+  if (/[\u0000-\u001f\u007f]/.test(p)) return false;
   if (p.startsWith('/') || p.startsWith('\\')) return false;
   if (isAbsolute(p)) return false;
   if (/^[a-zA-Z]:/.test(p)) return false; // Windows drive-absolute

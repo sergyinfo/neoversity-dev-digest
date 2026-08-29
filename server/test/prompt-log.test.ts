@@ -7,6 +7,7 @@ import {
   assembleProjectContext,
   specsReadFor,
 } from '../src/modules/project-context/assemble.js';
+import { PROJECT_CONTEXT_HEADING } from '../src/modules/project-context/constants.js';
 
 /**
  * Planted secrets. Every one of these strings is put INTO the assembly, and the
@@ -186,20 +187,65 @@ describe('project-context skip reasons never carry document content (§7, R4)', 
     expect(serialized).toContain('docs/pricing.md');
   });
 
-  it('a skip reason supplied by the caller is passed through unquoted', () => {
-    // The service supplies reasons like "file not found or path refused". This
-    // asserts the assembler does not decorate them with anything it read.
+  /**
+   * Fix-brief F7. This test used to plant `DOC_SECRET.slice(0, 0)` — the EMPTY
+   * STRING — as its secret, so the leak half asserted nothing at all; only the
+   * deep-equal was real. The plant could not be fixed in place, and the reason
+   * is structural rather than an oversight: inside `assembleProjectContext` a
+   * document reaches the `skipped` branch only when its content is `null` or
+   * whitespace-only, and neither can carry a secret. The branch that DOES hold
+   * real content while producing a derived reason is the budget drop.
+   *
+   * So the case now exercises both reason-producing paths in ONE call, with a
+   * real secret in the document the assembler actually read:
+   *
+   *   docs/gone.md   content null + caller reason  → passed through verbatim
+   *   docs/blank.md  whitespace only, no reason    → derived 'empty document'
+   *   docs/keys.md   REAL SECRET, over budget      → derived drop reason
+   *
+   * and asserts every reason the call produces — `skipped`, `dropped`, and the
+   * `specs_read` strings built from them — is free of it. Breaking either
+   * reason to quote the content it holds now turns this red.
+   */
+  it('a skip reason supplied by the caller is passed through unquoted, and no reason quotes content', () => {
+    const CALLER_REASON = 'file not found or path refused';
     const result = assembleProjectContext(
       [
-        { path: 'docs/gone.md', repoId: 'repo-1', origin: 'agent', content: null, skipReason: 'file not found' },
-        { path: 'docs/blank.md', repoId: 'repo-1', origin: 'agent', content: `  ${DOC_SECRET.slice(0, 0)}  ` },
+        { path: 'docs/gone.md', repoId: 'repo-1', origin: 'agent', content: null, skipReason: CALLER_REASON },
+        // Whitespace only — genuinely empty after trimming, which is the input
+        // that reaches the derived 'empty document' reason.
+        { path: 'docs/blank.md', repoId: 'repo-1', origin: 'agent', content: '  \n\t  ' },
+        // Read successfully, and over budget. The one non-injected document the
+        // assembler holds real text for.
+        { path: 'docs/keys.md', repoId: 'repo-1', origin: 'agent', content: DOC_BODY },
       ],
       tokenizer,
+      // Heading only — nothing fits, so `docs/keys.md` is dropped with its
+      // content in hand.
+      { budgetTokens: tokenizer.count(`${PROJECT_CONTEXT_HEADING}\n`) },
     );
+
+    // The caller's reason, verbatim: not paraphrased, not truncated, not
+    // decorated with anything the assembler read.
     expect(result.skipped).toEqual([
-      { path: 'docs/gone.md', repoId: 'repo-1', reason: 'file not found' },
+      { path: 'docs/gone.md', repoId: 'repo-1', reason: CALLER_REASON },
       { path: 'docs/blank.md', repoId: 'repo-1', reason: 'empty document' },
     ]);
+    expect(result.dropped).toEqual([
+      { path: 'docs/keys.md', repoId: 'repo-1', reason: 'dropped for budget (5 tokens)' },
+    ]);
+
+    // The plant, asserted absent from every reason-bearing output of the call.
+    const reasons = JSON.stringify({
+      skipped: result.skipped,
+      dropped: result.dropped,
+      specsRead: specsReadFor(result),
+    });
+    for (const leak of [DOC_SECRET, 'INTERNAL', 'rotate']) {
+      expect(reasons).not.toContain(leak);
+    }
+    // ...while the paths, the useful half, ARE carried.
+    expect(reasons).toContain('docs/keys.md');
   });
 
   it('`specs_read` lists every attachment, and the injected one carries no reason', () => {

@@ -66,6 +66,42 @@ const REVIEW_FIXTURE: Review = {
 };
 
 let repoSeq = 0;
+/**
+ * The AC-26 summary line the run records, located by a matcher that CANNOT
+ * match anything else on that channel (fix-brief F7).
+ *
+ * `run-executor` emits three kinds of `project context:` line, and the previous
+ * matcher — `startsWith('project context:') && includes('tokens')` — matched two
+ * of them:
+ *
+ *   project context: skipped <path> — <reason>
+ *   project context: dropped <path> — dropped for budget (8000 tokens)   ← also matched
+ *   project context: <n> document(s), ~<t> tokens                        ← the one wanted
+ *
+ * Drops are logged FIRST (`run-executor.ts:299` before `:314`), so in any run
+ * with a drop the old matcher returned the drop line, `/~(\d+) tokens/` found no
+ * `~` in it, and `.exec(...)![1]` threw a TypeError — a crash where an assertion
+ * was intended. It passed only because the two tests using it happened to have
+ * no drops; the AC-27 budget test, which does, never asserted the number at all.
+ *
+ * Anchored on both ends against the exact summary format, and the absence of a
+ * match is an ASSERTION here rather than a `!` waiting to throw.
+ */
+const PROJECT_CONTEXT_SUMMARY = /^project context: (\d+) document\(s\), ~(\d+) tokens$/;
+
+function projectContextTokens(trace: { log: { msg: string }[] }): number {
+  const matches = trace.log
+    .map((l) => PROJECT_CONTEXT_SUMMARY.exec(l.msg))
+    .filter((m): m is RegExpExecArray => m !== null);
+  expect(
+    matches,
+    `no "project context: N document(s), ~T tokens" line in the run trace; saw ${JSON.stringify(
+      trace.log.filter((l) => l.msg.startsWith('project context')).map((l) => l.msg),
+    )}`,
+  ).toHaveLength(1);
+  return Number(matches[0]![2]);
+}
+
 async function setupRepoAndPr(
   db: PgFixture['handle']['db'],
   workspaceId: string,
@@ -724,6 +760,12 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
         .map((s) => s.split(' — ')[0]);
       expect(runDropped).toEqual(markedDropped);
 
+      // AC-26's number, asserted in the one run that actually DROPS (F7). The
+      // drop line is logged before the summary and used to satisfy the old
+      // matcher, so this is the case that was silently unassertable.
+      expect(trace.log.some((l) => l.msg.startsWith('project context: dropped'))).toBe(true);
+      expect(projectContextTokens(trace)).toBe(projection.projected_tokens);
+
       await rm(join(clone, 'docs', 'budget'), { recursive: true, force: true });
       await app.close();
     });
@@ -748,10 +790,7 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
       // equality has a recorded value to assert against — the existing
       // prompt-assembly stat counts `assembly.specs` WITHOUT the heading and
       // therefore can never equal a projection that includes it.
-      const line = trace.log.find((l) => l.msg.startsWith('project context:') && l.msg.includes('tokens'));
-      expect(line).toBeDefined();
-      const recorded = Number(/~(\d+) tokens/.exec(line!.msg)![1]);
-      expect(recorded).toBe(projection.projected_tokens);
+      expect(projectContextTokens(trace)).toBe(projection.projected_tokens);
 
       await app.close();
     });
@@ -829,12 +868,7 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
 
       // AC-26's number, for the multi-repo shape: the projected total is the
       // section size the run recorded.
-      const line = trace.log.find(
-        (l) => l.msg.startsWith('project context:') && l.msg.includes('tokens'),
-      );
-      expect(line).toBeDefined();
-      const recorded = Number(/~(\d+) tokens/.exec(line!.msg)![1]);
-      expect(recorded).toBe(projection.projected_tokens);
+      expect(projectContextTokens(trace)).toBe(projection.projected_tokens);
 
       await app.close();
     });

@@ -22,6 +22,7 @@
  */
 import { z } from 'zod';
 import { SpecFile } from '@devdigest/shared';
+import { MAX_ATTACHMENT_ORDER, MAX_ATTACHMENT_PATH_LEN } from './constants.js';
 
 /**
  * Why a document list came back empty, when it did.
@@ -82,16 +83,40 @@ export type AttachmentTargetKind = z.infer<typeof AttachmentTargetKind>;
  * forbidden (§6 Cross-repo).
  */
 export const AttachmentInput = z.object({
-  /** Repo-relative POSIX path, as listed. */
-  path: z.string().min(1),
-  repo_id: z.string().min(1),
+  /**
+   * Repo-relative POSIX path, as listed.
+   *
+   * Bounded (fix-brief F10). `path` is the third column of the btree index
+   * `ctx_att_agent_repo_path_uq`, so an unbounded one reproduces the
+   * `symbols.name` failure documented in the same schema file
+   * (`db/schema/context.ts:23-34`) — a 500 carrying a raw Postgres index-row
+   * message — and, when `clone_path` is null, `attach` skips the `readDoc`
+   * check entirely and inserts it. The bound makes that a 422 here instead.
+   *
+   * Length only. WHICH paths are legal is `isSafeRelPath` + the allow-list, and
+   * both stay in `discovery.ts` as the single source of truth rather than being
+   * restated as a regex the two could drift apart on.
+   */
+  path: z.string().min(1).max(MAX_ATTACHMENT_PATH_LEN),
+  /**
+   * `.uuid()` per the `IdParams` convention (`_shared/schemas.ts:11`): "an
+   * invalid id becomes a clean 422 instead of a downstream DB/500" (F9). These
+   * values flow into `eq()` against `uuid` columns, where a malformed one is
+   * Postgres error 22P02 — and the global handler echoes `e.message`, so the
+   * raw database text would reach the caller.
+   */
+  repo_id: z.string().uuid(),
   target_kind: AttachmentTargetKind,
-  target_id: z.string().min(1),
+  target_id: z.string().uuid(),
   /**
    * Position within the section, ascending. Absent ⇒ the server resolves a
    * stable order by path, so injection order is never arbitrary.
+   *
+   * Bounded to the `integer` column's range (F10): past `int4` this is a 500
+   * carrying `value out of range for type integer`. `.min(0)` matches
+   * `ReorderBody`, which has always required a non-negative position.
    */
-  order: z.number().int().nullish(),
+  order: z.number().int().min(0).max(MAX_ATTACHMENT_ORDER).nullish(),
 });
 export type AttachmentInput = z.infer<typeof AttachmentInput>;
 
@@ -100,7 +125,7 @@ export type AttachmentInput = z.infer<typeof AttachmentInput>;
  * in, so unlike the input shape it is always a concrete number here.
  */
 export const AttachmentRow = AttachmentInput.extend({
-  id: z.string().min(1),
+  id: z.string().uuid(),
   order: z.number().int(),
   created_at: z.string().nullish(),
 });

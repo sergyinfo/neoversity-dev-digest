@@ -7,6 +7,10 @@ import {
   Projection,
   ProjectionEntry,
 } from '../src/modules/project-context/contract.js';
+import {
+  MAX_ATTACHMENT_ORDER,
+  MAX_ATTACHMENT_PATH_LEN,
+} from '../src/modules/project-context/constants.js';
 
 /**
  * L05 (S2) — the module-local Project Context envelopes.
@@ -89,40 +93,94 @@ describe('ContextDocList', () => {
 });
 
 describe('AttachmentInput / AttachmentRow', () => {
+  /**
+   * Real uuids, because every id-shaped field in this module's REQUEST schemas
+   * is `.uuid()` (fix-brief F9) — the `IdParams` convention from
+   * `_shared/schemas.ts:11`, which exists so "an invalid id becomes a clean 422
+   * instead of a downstream DB/500". These used to be `'repo-1'`/`'agent-1'`.
+   */
+  const REPO = '11111111-1111-4111-8111-111111111111';
+  const AGENT = '22222222-2222-4222-8222-222222222222';
+  const SKILL = '33333333-3333-4333-8333-333333333333';
+  const ATT = '44444444-4444-4444-8444-444444444444';
+
   it('parses a body with an explicit order, and one that leaves ordering to the server', () => {
     const explicit = AttachmentInput.parse({
       path: '.devdigest/specs/prd.md',
-      repo_id: 'repo-1',
+      repo_id: REPO,
       target_kind: 'agent',
-      target_id: 'agent-1',
+      target_id: AGENT,
       order: 2,
     });
     expect(explicit.order).toBe(2);
 
     const implicit = AttachmentInput.parse({
       path: '.devdigest/specs/prd.md',
-      repo_id: 'repo-1',
+      repo_id: REPO,
       target_kind: 'skill',
-      target_id: 'skill-1',
+      target_id: SKILL,
     });
     expect(implicit.order).toBeUndefined();
   });
 
   it('requires repo_id — a path is only meaningful against the repo it was listed in', () => {
-    const body = { path: 'a.md', target_kind: 'agent', target_id: 'agent-1' };
+    const body = { path: 'a.md', target_kind: 'agent', target_id: AGENT };
     expect(AttachmentInput.safeParse(body).success).toBe(false);
     expect(AttachmentInput.safeParse({ ...body, repo_id: '' }).success).toBe(false);
-    expect(AttachmentInput.safeParse({ ...body, repo_id: 'r1', target_kind: 'repo' }).success).toBe(false);
-    expect(AttachmentInput.safeParse({ ...body, repo_id: 'r1', path: '' }).success).toBe(false);
+    expect(AttachmentInput.safeParse({ ...body, repo_id: REPO, target_kind: 'repo' }).success).toBe(false);
+    expect(AttachmentInput.safeParse({ ...body, repo_id: REPO, path: '' }).success).toBe(false);
+  });
+
+  /**
+   * F9 — an id that is not a uuid is refused by the SCHEMA.
+   *
+   * Without this the string reaches `eq(t.agents.id, id)` against a `uuid`
+   * column, Postgres raises 22P02, and `app.ts:160-163` returns
+   * `message: e.message` — the raw Postgres text — as a 500.
+   */
+  it('F9 — repo_id and target_id must be uuids', () => {
+    const ok = { path: 'docs/a.md', repo_id: REPO, target_kind: 'agent', target_id: AGENT };
+    expect(AttachmentInput.safeParse(ok).success).toBe(true);
+    for (const bad of ['not-a-uuid', '1', "1'; drop table x --", `${REPO}x`]) {
+      expect(AttachmentInput.safeParse({ ...ok, repo_id: bad }).success).toBe(false);
+      expect(AttachmentInput.safeParse({ ...ok, target_id: bad }).success).toBe(false);
+    }
+  });
+
+  /**
+   * F10 — `path` and `order` carry bounds.
+   *
+   * `path` is the third column of the btree index `ctx_att_agent_repo_path_uq`,
+   * so this is the `symbols.name` failure from the same schema file
+   * (`db/schema/context.ts:23-34`) one table over: past ~2704 bytes Postgres
+   * rejects the index row outright. `order` is an `integer` column. Both would
+   * otherwise be 500s carrying the raw database message — and `attach` does not
+   * even reach `readDoc` when `clone_path` is null, so nothing else stands
+   * between the request and the insert.
+   */
+  it('F10 — path length and order magnitude are bounded at the edge', () => {
+    const ok = { path: 'docs/a.md', repo_id: REPO, target_kind: 'agent', target_id: AGENT };
+
+    expect(AttachmentInput.safeParse({ ...ok, path: 'a'.repeat(MAX_ATTACHMENT_PATH_LEN) }).success).toBe(true);
+    expect(AttachmentInput.safeParse({ ...ok, path: 'a'.repeat(MAX_ATTACHMENT_PATH_LEN + 1) }).success).toBe(false);
+    // The size the finding names — comfortably over the btree row limit.
+    expect(AttachmentInput.safeParse({ ...ok, path: 'a'.repeat(2704) }).success).toBe(false);
+
+    expect(AttachmentInput.safeParse({ ...ok, order: MAX_ATTACHMENT_ORDER }).success).toBe(true);
+    expect(AttachmentInput.safeParse({ ...ok, order: MAX_ATTACHMENT_ORDER + 1 }).success).toBe(false);
+    expect(AttachmentInput.safeParse({ ...ok, order: 2 ** 31 }).success).toBe(false);
+    expect(AttachmentInput.safeParse({ ...ok, order: -1 }).success).toBe(false);
+    // Absent is still the documented "server resolves a stable order" case.
+    expect(AttachmentInput.safeParse({ ...ok, order: null }).success).toBe(true);
   });
 
   it('resolves order on the row, where it is always concrete', () => {
     const row = AttachmentRow.parse({
-      id: 'att-1',
+      id: ATT,
       path: '.devdigest/specs/prd.md',
-      repo_id: 'repo-1',
+      repo_id: REPO,
       target_kind: 'agent',
-      target_id: 'agent-1',
+      target_id: AGENT,
       order: 0,
       created_at: '2026-08-29T09:00:00.000Z',
     });
@@ -130,11 +188,11 @@ describe('AttachmentInput / AttachmentRow', () => {
 
     expect(
       AttachmentRow.safeParse({
-        id: 'att-1',
+        id: ATT,
         path: 'a.md',
-        repo_id: 'repo-1',
+        repo_id: REPO,
         target_kind: 'agent',
-        target_id: 'agent-1',
+        target_id: AGENT,
       }).success,
     ).toBe(false);
   });

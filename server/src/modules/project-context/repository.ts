@@ -307,11 +307,19 @@ export class ProjectContextRepository {
 
     const pairs = new Set<string>();
     for (const r of [...direct, ...inherited]) {
-      if (r.agentId) pairs.add(`${r.path} ${r.agentId}`);
+      // A NUL separator, for the reason `attachmentKey` (contract.ts) gives:
+      // it is the one byte that cannot appear in either component, because
+      // `isSafeRelPath` rejects any path containing one. A SPACE would not do
+      // — paths with spaces are ordinary, and splitting on the first one would
+      // bucket `docs/my notes.md` under `docs/my` (fix-brief F8, contested:
+      // this already was a NUL). Written as an ESCAPE rather than a literal
+      // byte: a raw 0x00 makes the whole file `data` to grep, which silently
+      // hides every match in it and is what made the byte look like a space.
+      if (r.agentId) pairs.add(`${r.path}\u0000${r.agentId}`);
     }
     const byPath: Record<string, number> = {};
     for (const key of pairs) {
-      const path = key.slice(0, key.indexOf(' '));
+      const path = key.slice(0, key.indexOf('\u0000'));
       byPath[path] = (byPath[path] ?? 0) + 1;
     }
 
