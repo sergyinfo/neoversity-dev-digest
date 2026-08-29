@@ -1,0 +1,23 @@
+[
+  {"query": "Can you review this PR before I merge it? It touches the login endpoint.", "should_trigger": true},
+  {"query": "I'm adding file upload to the blog — what should I watch out for?", "should_trigger": true},
+  {"query": "Write the JWT auth middleware for my Express API.", "should_trigger": true},
+  {"query": "Is it safe to render post content with dangerouslySetInnerHTML?", "should_trigger": true},
+  {"query": "Set up CORS on my Express app so the React client can call it with cookies.", "should_trigger": true},
+  {"query": "We're storing user passwords in Mongo — check my user model.", "should_trigger": true},
+  {"query": "Someone reported they can delete other people's posts. Look at the posts controller.", "should_trigger": true},
+  {"query": "Where should I put my Gemini API key so the frontend can use it?", "should_trigger": true},
+  {"query": "Add a search endpoint that filters posts by title from a query parameter.", "should_trigger": true},
+  {"query": "Review the account service before we ship — I want to know what could bite us in production.", "should_trigger": true},
+
+  {"query": "My Express server returns 500 on every request — help me work out the middleware ordering.", "should_trigger": false},
+  {"query": "Refactor this Mongoose model to use discriminators.", "should_trigger": false},
+  {"query": "Write unit tests for the login route.", "should_trigger": false},
+  {"query": "The jsonwebtoken upgrade broke my build — fix the import.", "should_trigger": false},
+  {"query": "Add pagination to the posts list endpoint.", "should_trigger": false},
+  {"query": "This React component re-renders too often — make it faster.", "should_trigger": false},
+  {"query": "Set up a rate limiter so we don't blow our monthly API budget.", "should_trigger": false},
+  {"query": "Convert this Express app from CommonJS to ESM.", "should_trigger": false},
+  {"query": "Write a migration that adds an isFeatured field to posts.", "should_trigger": false},
+  {"query": "Our CORS preflight fails for PATCH — add it to the allowed methods list.", "should_trigger": false}
+]

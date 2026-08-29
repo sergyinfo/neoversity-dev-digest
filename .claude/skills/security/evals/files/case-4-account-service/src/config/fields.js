@@ -1,0 +1,11 @@
+const PUBLIC_PROFILE_FIELDS = ['name', 'bio', 'avatarUrl'];
+
+const ADMIN_EDITABLE_FIELDS = ['role', 'isActive'];
+
+const ALLOWED_PROFILE_FIELDS = [...PUBLIC_PROFILE_FIELDS, ...ADMIN_EDITABLE_FIELDS];
+
+module.exports = {
+  PUBLIC_PROFILE_FIELDS,
+  ADMIN_EDITABLE_FIELDS,
+  ALLOWED_PROFILE_FIELDS,
+};

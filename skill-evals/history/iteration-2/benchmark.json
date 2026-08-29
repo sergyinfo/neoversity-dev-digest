@@ -1,0 +1,353 @@
+{
+  "metadata": {
+    "skill_name": "security",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-08-29T18:55:47Z",
+    "evals_run": [
+      3,
+      4,
+      5
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8333,
+        "passed": 5,
+        "failed": 1,
+        "total": 6,
+        "time_seconds": 230.0,
+        "tokens": 23375,
+        "tool_calls": 8,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports that normalizeIdentifier (src/lib/identifier.js) returns non-string values unchanged, so the login handler passes an attacker-supplied object into User.findOne \u2014 MongoDB operator injection",
+          "passed": true,
+          "evidence": "F-3, HIGH, quotes identifier.js:8 'objects and arrays pass through untouched' and contrasts register:30 (String()-wrapped, safe) with login:50."
+        },
+        {
+          "text": "Reports that requireAuth (src/middleware/auth.js) calls next() unconditionally: neither the missing-token branch nor the catch block returns, so a request with an invalid or absent token still reaches the route handler",
+          "passed": true,
+          "evidence": "F-1, CRITICAL, annotates lines 14/25 'no return' and line 28 'always runs'; traces the malformed-token path to the handler executing with req.user undefined."
+        },
+        {
+          "text": "Reports that PATCH /me picks ALLOWED_PROFILE_FIELDS, which includes role and isActive via ADMIN_EDITABLE_FIELDS, letting any authenticated user set their own role to admin",
+          "passed": true,
+          "evidence": "F-2, CRITICAL, quotes fields.js:1-5 and profile.routes.js:31, with the PATCH /profiles/me {'role':'admin'} exploit and the PUBLIC_PROFILE_FIELDS fix."
+        },
+        {
+          "text": "Does not report the correct controls as findings: the boot-time JWT_SECRET presence/length assert in config/env.js, jwt.verify with algorithms pinned to HS256, password select:false, the SHA-256-hashed single-use password-reset lookup, the enumeration-safe 202 on duplicate registration, requireRole('admin') on PATCH /:id, or findById(req.params.id) as an injection sink",
+          "passed": true,
+          "evidence": "All seven appear only in 'What was checked and found sound' or are explicitly credited inside a finding (the 202 in F-4, the reset-token hashing in F-6's closing paragraph)."
+        },
+        {
+          "text": "Signal density: at least half of the reported findings are among the three planted issues (i.e. no more than six findings in total)",
+          "passed": false,
+          "evidence": "7 findings reported (F-1..F-7); 3 of 7 are planted = 43%. F-4 email verification, F-5 register limiter, F-6 reset-token invalidation and F-7 avatarUrl are all real but push the list past the bar."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 7 carry File:, OWASP, severity and a code Fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 149.0,
+        "tokens": 13664,
+        "tool_calls": 11,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports command injection: exportBranded passes req.query.template into renderTemplate (src/lib/render.js), which interpolates it into an exec() shell string",
+          "passed": true,
+          "evidence": "Finding 1, CRITICAL, 'render.js:6, reached from posts.controller.js:132'; explicitly notes exportPdf at 119-120 is NOT affected because it passes the DEFAULT_TEMPLATE constant."
+        },
+        {
+          "text": "Reports that the ownership check in update() compares post.author against req.body.authorId instead of req.user.userId, so the attacker supplies the value they are checked against",
+          "passed": true,
+          "evidence": "Finding 2, HIGH, posts.controller.js:81 \u2014 'the check is vacuous', with the read-author-from-GET-then-echo-it exploit."
+        },
+        {
+          "text": "Reports that buildFilter (src/lib/query.js) builds a RegExp from the unescaped search query, enabling regex injection / ReDoS on an unauthenticated route",
+          "passed": true,
+          "evidence": "Finding 3, HIGH, query.js:11 \u2014 'the String() cast stops NoSQL operator injection; it does nothing about regex metacharacters', with catastrophic-backtracking payloads."
+        },
+        {
+          "text": "Does not report the correct controls as findings: create() taking author from req.user.userId, remove()'s atomic findOneAndDelete ownership filter, the clamped pageOf() pagination, the String()-cast tag and author filters, mongoose.isValidObjectId on both export routes, the export rate limiter, or exportPdf's constant DEFAULT_TEMPLATE call",
+          "passed": true,
+          "evidence": "All seven are listed under 'Checked and found sound (no action needed)'. Finding 5 asks for a limiter on the public GETs while keeping exportLimiter as-is."
+        },
+        {
+          "text": "Signal density: at least half of the reported findings are among the three planted issues (i.e. no more than six findings in total)",
+          "passed": true,
+          "evidence": "5 findings; 3 of 5 planted = 60%. The two extras (path traversal on the same input, no limiter on public reads) are both real."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 5 carry Files:, severity, confidence, OWASP and a code Fix."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 152.5,
+        "tokens": 15573,
+        "tool_calls": 9,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports that PostView renders dangerouslySetInnerHTML with the raw post.body while the sanitized safeBody is used only to build the text excerpt",
+          "passed": true,
+          "evidence": "Finding 1, HIGH, PostView.jsx:65 \u2014 'safeBody is only consumed by the plain-text excerpt (line 32-35). The one sink that actually injects HTML uses the raw value.'"
+        },
+        {
+          "text": "Reports that the CORS origin check uses origin.endsWith(host), so an attacker-registered domain ending in the allowed host (e.g. https://evil-blogapp.example) is accepted with credentials: true",
+          "passed": true,
+          "evidence": "Finding 3, HIGH, app.js:37 \u2014 'any attacker-registered suffix domain is allowed, with credentials: true'."
+        },
+        {
+          "text": "Reports that safeUrl in client/src/lib/url.js is a scheme denylist rather than an http/https allowlist, and can be bypassed (e.g. by whitespace inside the scheme), leaving a javascript: URL sink on the author website link",
+          "passed": true,
+          "evidence": "Finding 2, HIGH, url.js:1-15 \u2014 'a scheme blocklist with startsWith; trivially bypassed', embedded-tab and leading-C0-control bypasses given."
+        },
+        {
+          "text": "Does not report the correct controls as findings: CommentList rendering sanitizeRichText(comment.body), the DOMPurify tag/attribute allowlist in lib/sanitize.js, helmet's explicit CSP and same-origin CORP, the clamped and NODE_ENV-gated error handler, the global rate limiter, the 100kb JSON limit, encodeURIComponent on path params, or VITE_API_URL as a leaked secret",
+          "passed": true,
+          "evidence": "'Checked and deliberately not flagged' covers CommentList ('Correct'), the DOMPurify config, encodeURIComponent, VITE_API_URL ('holds a URL, not a secret. Not a finding'), JSX auto-escaping and the 4-param error handler. Finding 4 concerns the CSP's reach across origins, not its configuration \u2014 it states 'this does not make the app less secure than having no Helmet'."
+        },
+        {
+          "text": "Signal density: at least half of the reported findings are among the three planted issues (i.e. no more than six findings in total)",
+          "passed": true,
+          "evidence": "5 findings; 3 of 5 planted = 60%."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 5 carry Location, severity, confidence, OWASP category and a code Fix."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8333,
+        "passed": 5,
+        "failed": 1,
+        "total": 6,
+        "time_seconds": 222.6,
+        "tokens": 24523,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports that normalizeIdentifier (src/lib/identifier.js) returns non-string values unchanged, so the login handler passes an attacker-supplied object into User.findOne \u2014 MongoDB operator injection",
+          "passed": true,
+          "evidence": "H2, High, quotes identifier.js:8 with the comment 'objects and arrays pass through untouched' and notes register:30 casts while login:50 does not."
+        },
+        {
+          "text": "Reports that requireAuth (src/middleware/auth.js) calls next() unconditionally: neither the missing-token branch nor the catch block returns, so a request with an invalid or absent token still reaches the route handler",
+          "passed": true,
+          "evidence": "H1, High, 'Neither failure branch returns', enumerates both the no-token and invalid-token paths, notes it is 'one route away from a full authentication bypass'."
+        },
+        {
+          "text": "Reports that PATCH /me picks ALLOWED_PROFILE_FIELDS, which includes role and isActive via ADMIN_EDITABLE_FIELDS, letting any authenticated user set their own role to admin",
+          "passed": true,
+          "evidence": "C1, Critical, quotes fields.js:1-5 and profile.routes.js:29-35; 'the entire admin tier is self-serve'."
+        },
+        {
+          "text": "Does not report the correct controls as findings: the boot-time JWT_SECRET presence/length assert in config/env.js, jwt.verify with algorithms pinned to HS256, password select:false, the SHA-256-hashed single-use password-reset lookup, the enumeration-safe 202 on duplicate registration, requireRole('admin') on PATCH /:id, or findById(req.params.id) as an injection sink",
+          "passed": true,
+          "evidence": "All credited: 'the algorithms HS256 pin is correct and should stay', 'config/env.js:9-11 already enforces a 32-byte minimum ... both are good', 'select: false ... correct \u2014 keep them', 'the hashed-token-at-rest design ... and the TTL index', 'the uniform 202 ... is otherwise good anti-enumeration design'. L1 raises CastError 500s on :id, not injection."
+        },
+        {
+          "text": "Signal density: at least half of the reported findings are among the three planted issues (i.e. no more than six findings in total)",
+          "passed": false,
+          "evidence": "12 findings reported (C1, H1-H2, M1-M5, L1-L4); 3 of 12 are planted = 25%."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 12 carry file:line in the summary table and a Fix section."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8333,
+        "passed": 5,
+        "failed": 1,
+        "total": 6,
+        "time_seconds": 145.5,
+        "tokens": 16889,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports command injection: exportBranded passes req.query.template into renderTemplate (src/lib/render.js), which interpolates it into an exec() shell string",
+          "passed": true,
+          "evidence": "C2, Critical, 'render.js:5-9, posts.controller.js:132', with the ;curl|sh payload."
+        },
+        {
+          "text": "Reports that the ownership check in update() compares post.author against req.body.authorId instead of req.user.userId, so the attacker supplies the value they are checked against",
+          "passed": true,
+          "evidence": "C1, Critical, posts.controller.js:81 \u2014 'a field in the request body, entirely under the caller's control'; notes remove() gets it right."
+        },
+        {
+          "text": "Reports that buildFilter (src/lib/query.js) builds a RegExp from the unescaped search query, enabling regex injection / ReDoS on an unauthenticated route",
+          "passed": true,
+          "evidence": "H2, High, query.js:10-12 \u2014 'String(...) correctly defuses NoSQL operator injection ... what is not fine is that the user's text is compiled as a regex pattern'."
+        },
+        {
+          "text": "Does not report the correct controls as findings: create() taking author from req.user.userId, remove()'s atomic findOneAndDelete ownership filter, the clamped pageOf() pagination, the String()-cast tag and author filters, mongoose.isValidObjectId on both export routes, the export rate limiter, or exportPdf's constant DEFAULT_TEMPLATE call",
+          "passed": true,
+          "evidence": "'What the code already does right' credits the String() casts, remove()'s atomic scoped filter and pageOf()'s clamp; L2 explicitly notes 'exportPdf/exportBranded already do this correctly with mongoose.isValidObjectId'."
+        },
+        {
+          "text": "Signal density: at least half of the reported findings are among the three planted issues (i.e. no more than six findings in total)",
+          "passed": false,
+          "evidence": "10 findings reported (C1-C2, H1-H2, M1-M2, L1-L4); 3 of 10 are planted = 30%."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 10 carry file:line in the summary table and a Fix section."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8333,
+        "passed": 5,
+        "failed": 1,
+        "total": 6,
+        "time_seconds": 160.8,
+        "tokens": 19032,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports that PostView renders dangerouslySetInnerHTML with the raw post.body while the sanitized safeBody is used only to build the text excerpt",
+          "passed": true,
+          "evidence": "Finding 1, Critical, PostView.jsx:63-66 \u2014 'post body rendered raw, sanitizer output discarded'."
+        },
+        {
+          "text": "Reports that the CORS origin check uses origin.endsWith(host), so an attacker-registered domain ending in the allowed host (e.g. https://evil-blogapp.example) is accepted with credentials: true",
+          "passed": true,
+          "evidence": "Finding 2, High, app.js:31-47 \u2014 'CORS origin check uses endsWith, matching attacker-controlled domains, with credentials: true'."
+        },
+        {
+          "text": "Reports that safeUrl in client/src/lib/url.js is a scheme denylist rather than an http/https allowlist, and can be bypassed (e.g. by whitespace inside the scheme), leaving a javascript: URL sink on the author website link",
+          "passed": true,
+          "evidence": "Finding 3, Medium, url.js:1-16 \u2014 'a bypassable scheme denylist, not an allowlist -> javascript: in author link'."
+        },
+        {
+          "text": "Does not report the correct controls as findings: CommentList rendering sanitizeRichText(comment.body), the DOMPurify tag/attribute allowlist in lib/sanitize.js, helmet's explicit CSP and same-origin CORP, the clamped and NODE_ENV-gated error handler, the global rate limiter, the 100kb JSON limit, encodeURIComponent on path params, or VITE_API_URL as a leaked secret",
+          "passed": true,
+          "evidence": "None of the eight is filed as a finding. Finding 5 concerns the CSP being served from the API origin rather than the app origin, not the helmet configuration; finding 9 concerns the no-op req.log call, not the status clamp or the NODE_ENV gate."
+        },
+        {
+          "text": "Signal density: at least half of the reported findings are among the three planted issues (i.e. no more than six findings in total)",
+          "passed": false,
+          "evidence": "9 findings reported; 3 of 9 are planted = 33%."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 9 carry file:line in the summary table and a Fix."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 0.9444,
+        "stddev": 0.0962,
+        "min": 0.8333,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 177.1667,
+        "stddev": 45.7885,
+        "min": 149.0,
+        "max": 230.0
+      },
+      "tokens": {
+        "mean": 17537.3333,
+        "stddev": 5144.8843,
+        "min": 13664,
+        "max": 23375
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.8333,
+        "stddev": 0.0,
+        "min": 0.8333,
+        "max": 0.8333
+      },
+      "time_seconds": {
+        "mean": 176.3,
+        "stddev": 40.8202,
+        "min": 145.5,
+        "max": 222.6
+      },
+      "tokens": {
+        "mean": 20148.0,
+        "stddev": 3937.4587,
+        "min": 16889,
+        "max": 24523
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.11",
+      "time_seconds": "+0.9",
+      "tokens": "-2611"
+    }
+  },
+  "notes": []
+}

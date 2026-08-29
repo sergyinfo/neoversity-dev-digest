@@ -26,3 +26,13 @@ test-results/
 
 # local docker-compose port remap (host 5432 taken by another stack)
 docker-compose.override.yml
+
+# skill-eval run output (model runs; conclusions live in skill-evals/history/)
+skill-evals/results/
+
+# ~/.gitignore_global excludes .claude/skills; this repo shares its skills with
+# the team via version control (see .claude/skills/README.md), so re-include them.
+# The directory must be re-included before its contents — git cannot re-include a
+# file whose parent directory is excluded.
+!.claude/skills/
+!.claude/skills/**

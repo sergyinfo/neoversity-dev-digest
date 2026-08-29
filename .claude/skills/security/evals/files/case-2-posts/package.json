@@ -1,0 +1,10 @@
+{
+  "name": "blogapp-posts",
+  "version": "2.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "dependencies": {
+    "express": "4.19.2",
+    "mongoose": "8.5.1"
+  }
+}

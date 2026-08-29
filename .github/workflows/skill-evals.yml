@@ -1,0 +1,107 @@
+# A/B evals for the skills in .claude/skills.
+#
+# Unlike every other workflow in this repo, this one calls a model: each run is a
+# `claude -p` invocation, and the full matrix (3 cases x 2 arms x 3 runs) costs
+# roughly 0.9M tokens. That is why it is manual + weekly rather than per-PR.
+#
+# The push trigger is the point of the whole thing: most skills here are vendored from
+# other people's GitHub repos and pinned by hash in skills-lock.json. When a hash moves,
+# this workflow answers "does the skill still earn its keep?" — for the security skill
+# (which is locally owned, not in the lockfile) the whole measured effect is reporting
+# discipline, and an edit could remove it silently.
+name: skill evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      skill:
+        description: Skill to evaluate (name under .claude/skills, or a path)
+        type: string
+        default: security
+      tier:
+        description: Case tier — the gates are calibrated on data-flow
+        type: string
+        default: data-flow
+      runs:
+        description: Runs per arm per case
+        type: string
+        default: '3'
+      model:
+        description: Model alias for the executor runs
+        type: string
+        default: opus
+  schedule:
+    # Mondays 03:00 UTC — after any weekend skill updates, before the week starts.
+    - cron: '0 3 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'skills-lock.json'
+      - '.claude/skills/**'
+      - 'skill-evals/**'
+      - '.github/workflows/skill-evals.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    name: ${{ inputs.skill || 'security' }} A/B
+    runs-on: ubuntu-latest
+    # A single hung executor must not burn the default 6h budget.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Claude Code CLI
+        run: npm i -g @anthropic-ai/claude-code
+
+      - name: Install harness deps
+        working-directory: skill-evals
+        run: npm ci
+
+      # Fails fast and loudly rather than letting every run error one by one.
+      - name: Check auth
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo "::error::ANTHROPIC_API_KEY is not set"; exit 1; }
+          claude --version
+
+      - name: Run evals
+        working-directory: skill-evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          npx tsx run.ts \
+            --skill "${{ inputs.skill || 'security' }}" \
+            --tier "${{ inputs.tier || 'data-flow' }}" \
+            --runs "${{ inputs.runs || '3' }}" \
+            --model "${{ inputs.model || 'opus' }}" \
+            --concurrency 4 \
+            --out "results/ci-${{ github.run_id }}"
+
+      - name: Publish the benchmark to the job summary
+        if: always()
+        working-directory: skill-evals
+        run: |
+          f="results/ci-${{ github.run_id }}/benchmark.md"
+          [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY" || echo "no benchmark produced" >> "$GITHUB_STEP_SUMMARY"
+
+      # Reviews are the evidence behind a gate failure — keep them either way.
+      - name: Upload run output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-evals-${{ github.run_id }}
+          path: skill-evals/results/ci-${{ github.run_id }}/**
+          if-no-files-found: warn
+          retention-days: 30

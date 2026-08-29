@@ -1,0 +1,23 @@
+{
+  "name": "@devdigest/skill-evals",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A/B eval harness for the skills in .claude/skills. The cases live with each skill (<skill>/evals); this package is only the runner.",
+  "scripts": {
+    "test": "tsx run.ts --skill security",
+    "eval:security": "tsx run.ts --skill security",
+    "eval:textbook": "tsx run.ts --skill security --tier textbook",
+    "eval:smoke": "tsx run.ts --skill security --runs 1 --cases account-service-flows",
+    "grade": "tsx run.ts --skill security --grade-only",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
