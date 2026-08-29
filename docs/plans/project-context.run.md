@@ -11,7 +11,7 @@ Ceiling: **12** — the plan's counted envelope of 11, plus `doc-writer` added a
 |---|---|---|---|
 | 0 | Intake & baseline | **done** | Tree clean at `a8273db`; baseline captured before anything changed, all green |
 | 1 | Implementation (T0–T6) | **done** | all 7 tracks landed, `55a1639`…`aa7bf6c` |
-| 2 | Review ×3 | **in progress** | boundary: **1 major** · correctness and security running |
+| 2 | Review ×3 | **in progress** | boundary: 1 major · correctness: **3 major, 3 minor** · security running |
 | 3 | Fix loop (≤2 rounds) | pending | — |
 | 4 | Verification | pending | — |
 | 5 | Land | pending | — |
@@ -53,6 +53,13 @@ what makes a later failure attributable.
 | # | Source | Severity | Finding | Round | Outcome |
 |---|---|---|---|---|---|
 | A1 | architecture-reviewer B3 | **major** | `run-executor.ts:19,289` imports and constructs `ProjectContextService` directly instead of reaching it through the container, the way `repoIntel`, `intent` and `blast` all are. Costs the `ContainerOverrides` injection seam every sibling capability has, makes `reviews` depend on a concrete class in another module, and its justifying comment cites the wrong precedent — the `intent/block.js` import above it is justified as a **leaf** (contract types only), while `project-context/service.ts` imports the container and is not one | 1 | open |
+| C1 | code-review | **major** | The projection can never apply the cross-repo skip. `service.ts:250` passes `att.repoId` as `reviewRepoId`, so `readAttachment`'s guard at `:286` is `x !== x` — permanently false. A multi-repo agent's projection injects documents the run skips, so AC-26's "agree exactly" fails. Root cause is structural: the projection endpoint takes no repo | 1 | open |
+| C2 | code-review | **major** | No dedupe in `resolveForAgent` (`repository.ts:234-243`). The partial unique indexes are per target kind, so a document attached directly **and** via an enabled skill arrives twice, is rendered twice into the prompt, and pays the budget twice — possibly pushing a different document out. `usageCounts` dedupes this exact case for display, so the page says 1 while the run sends 2. Knock-ons: a React duplicate `key`, and `specsReadFor`'s path-keyed reason map overwriting one cause with another | 1 | open |
+| C3 | code-review | **major** | `attachedPaths` ignores `repo_id` (`AgentsTab.tsx:35-38,63`, `SkillsTab.tsx:26-29,71`); the server lists attachments by workspace and target only. Two repos with the same path: the toggle renders on for a document that is not attached here, and detaching removes **the other repository's** attachment. One predicate fixes it | 1 | open |
+| C4 | code-review | minor | `usageCounts` splits its composite key on the **first** space (`repository.ts:282-287`), and paths may contain spaces. `docs/my notes.md` parses as `docs/my`, so a document in use renders "—" and a phantom bucket appears | 1 | open |
+| C5 | code-review | minor | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's `assembly.specs` does not. The demo artefact shows the exact heading-vs-`assembly.specs` conflation BQ-1 exists to prevent | 1 | open |
+| C6 | code-review | minor | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** — the `any` flag is dead code | 1 | open |
+| C7 | code-review | test quality | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string — as its "secret"; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; and `reviews.it.test.ts:750` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion | 1 | open |
 
 ## Decisions
 
