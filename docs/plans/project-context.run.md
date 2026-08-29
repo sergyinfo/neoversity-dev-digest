@@ -12,11 +12,11 @@ Ceiling: **12** — the plan's counted envelope of 11, plus `doc-writer` added a
 | 0 | Intake & baseline | **done** | Tree clean at `a8273db`; baseline captured before anything changed, all green |
 | 1 | Implementation (T0–T6) | **done** | all 7 tracks landed, `55a1639`…`aa7bf6c` |
 | 2 | Review ×3 | **done** | boundary: 1 major · correctness: 3 major, 3 minor · security: **1 BLOCKER**, 1 major, 5 minor |
-| 3 | Fix loop (round 1 of ≤2) | **done** | `148151c` — 1 blocker + 5 majors, all fixed, none contested, each proven red before the fix |
+| 3 | Fix loop (2 rounds) | **done** | Round 1 `148151c` — 1 blocker + 5 majors, none contested · Round 2 `5022927` — 4 fixed, **1 contested with evidence** |
 | 4 | Verification | **done** | **19/19 steps verified, 0 not verified.** 30/31 ACs verified; AC-24's e2e half unreached |
-| 5 | Land | pending | — |
+| 5 | Land | **done** | `server/docs/project-context.md` written; INSIGHTS were owned by T6 and deliberately not re-run; committed per track and per round |
 
-**Agent count: 13 / 15** — ceiling raised from 12 at the Stage 1→2 boundary so the fix rounds are funded.
+**Agent count: 15 / 15 — at the ceiling.** 7 `implementer` tracks, 3 reviewers, 2 fix rounds, 1 `plan-verifier`, 1 `doc-writer`, and the raise from 12 recorded below. — ceiling raised from 12 at the Stage 1→2 boundary so the fix rounds are funded.
 
 ### Tracks
 
@@ -74,6 +74,39 @@ what makes a later failure attributable.
 | Stage 0 | `doc-writer` at the end | **Yes**, added beyond the plan's envelope |
 
 ## Open at the end
+
+### Round 2 closed five of the nine — and refuted one of them
+
+`5022927` fixed F7 (the three vacuous tests), F9, F10 and F11, and **contested C4/F8**.
+
+**The contested one is worth reading.** The reviewer reported that `usageCounts` splits its
+composite key on the first space. It does not: the separator is a raw **NUL byte**, and
+`isSafeRelPath` rejects any path containing one, so the key was already unambiguous and the
+counts were already correct. Both reviewers who reported it, and I when I relayed it, read the
+byte as a space — because **a literal `0x00` in a `.ts` file makes `grep` treat the whole file
+as binary and print nothing**, and it renders as whitespace in most viewers. The implementer
+lost a cycle to it as well, then proved the code correct both ways: the shipped separator gives
+the right count, and changing it to a real space turns the new test red.
+
+It replaced the two literal bytes with `\u0000` escapes — no behaviour change, and the file is
+greppable again. Three other files in `server/src` carry the same habit and are untouched.
+
+**Two structural facts surfaced while making the tests honest, and both generalise:**
+- The old traversal assertion checked only status and code, and **three independent gates return
+  the identical 422 envelope**. Deleting any one gate left the test green. Asserting the
+  *message* distinguishes schema from service — but still not gate from gate.
+- A planted-secret guard aimed at **skip** reasons is vacuous **by construction**: the skip
+  branch is reached only when content is `null` or whitespace-only, so it cannot carry a secret.
+  The drop branch is the only non-injected outcome holding real text. That is why
+  `DOC_SECRET.slice(0, 0)` looked like a plausible test.
+
+### Four minors still open
+
+C5 (the seeded trace writes `sectionText`, which includes the heading, into
+`prompt_assembly.specs`, which does not) · C6 (`SkillsTab` renders a null contribution as `0`)
+· S3 (the untrusted fence escape is exact-match and case-sensitive; a forged **opening** tag is
+not escaped at all) · S7 (the attachment-count cap is a read-then-insert TOCTOU with no
+DB-level backstop, unlike the duplicate case).
 
 ### Nine minors, deliberately held out of round 1
 
