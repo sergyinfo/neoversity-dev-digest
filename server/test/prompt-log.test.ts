@@ -163,8 +163,8 @@ describe('project-context skip reasons never carry document content (§7, R4)', 
   it('a dropped document is recorded by path and cause only', () => {
     const result = assembleProjectContext(
       [
-        { path: 'docs/pricing.md', origin: 'agent', content: DOC_BODY },
-        { path: 'docs/keys.md', origin: 'agent', content: DOC_BODY },
+        { path: 'docs/pricing.md', repoId: 'repo-1', origin: 'agent', content: DOC_BODY },
+        { path: 'docs/keys.md', repoId: 'repo-1', origin: 'agent', content: DOC_BODY },
       ],
       tokenizer,
       // A budget small enough that both documents are dropped.
@@ -191,22 +191,22 @@ describe('project-context skip reasons never carry document content (§7, R4)', 
     // asserts the assembler does not decorate them with anything it read.
     const result = assembleProjectContext(
       [
-        { path: 'docs/gone.md', origin: 'agent', content: null, skipReason: 'file not found' },
-        { path: 'docs/blank.md', origin: 'agent', content: `  ${DOC_SECRET.slice(0, 0)}  ` },
+        { path: 'docs/gone.md', repoId: 'repo-1', origin: 'agent', content: null, skipReason: 'file not found' },
+        { path: 'docs/blank.md', repoId: 'repo-1', origin: 'agent', content: `  ${DOC_SECRET.slice(0, 0)}  ` },
       ],
       tokenizer,
     );
     expect(result.skipped).toEqual([
-      { path: 'docs/gone.md', reason: 'file not found' },
-      { path: 'docs/blank.md', reason: 'empty document' },
+      { path: 'docs/gone.md', repoId: 'repo-1', reason: 'file not found' },
+      { path: 'docs/blank.md', repoId: 'repo-1', reason: 'empty document' },
     ]);
   });
 
   it('`specs_read` lists every attachment, and the injected one carries no reason', () => {
     const result = assembleProjectContext(
       [
-        { path: 'docs/ok.md', origin: 'agent', content: DOC_BODY },
-        { path: 'docs/gone.md', origin: 'agent', content: null, skipReason: 'file not found' },
+        { path: 'docs/ok.md', repoId: 'repo-1', origin: 'agent', content: DOC_BODY },
+        { path: 'docs/gone.md', repoId: 'repo-1', origin: 'agent', content: null, skipReason: 'file not found' },
       ],
       tokenizer,
     );
@@ -219,7 +219,7 @@ describe('project-context skip reasons never carry document content (§7, R4)', 
     // `run-executor` formats `project context: skipped ${path} — ${reason}`.
     // Nothing else is interpolated, so if the reasons are clean the lines are.
     const result = assembleProjectContext(
-      [{ path: 'docs/gone.md', origin: 'agent', content: null, skipReason: 'file not found' }],
+      [{ path: 'docs/gone.md', repoId: 'repo-1', origin: 'agent', content: null, skipReason: 'file not found' }],
       tokenizer,
     );
     const lines = result.skipped.map((s) => `project context: skipped ${s.path} — ${s.reason}`);

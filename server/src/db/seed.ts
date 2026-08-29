@@ -738,6 +738,7 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         const read = await readDoc(contextRoot.root, rel);
         docs.push({
           path: rel,
+          repoId,
           origin: 'agent',
           content: read.ok ? read.content : null,
           skipReason: read.ok ? undefined : read.reason,

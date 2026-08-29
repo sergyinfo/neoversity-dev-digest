@@ -26,15 +26,27 @@ export function AgentsTab({ repoId, docs }: { repoId: string; docs: SpecFile[] }
   const agentId = selected ?? agents.data?.[0]?.id ?? null;
 
   const attachments = useTargetAttachments("agent", agentId);
-  const projection = useAgentContextProjection(agentId);
+  const projection = useAgentContextProjection(agentId, repoId);
   const allSkills = useSkills();
   const agentSkills = useAgentSkills(agentId);
   const attach = useAttachContextDoc();
   const detach = useDetachContextDoc();
 
+  /**
+   * Attachments belong to a (repo, path) PAIR, not to a path (fix-brief F4).
+   *
+   * `listForTarget` returns every attachment on this agent across ALL
+   * repositories, and the document list on screen is this repo's. Comparing on
+   * `path` alone rendered the toggle ON for a document attached from a
+   * DIFFERENT repo — so this repo's copy could not be attached at all, and
+   * switching the toggle off detached the other repository's row.
+   */
   const attachedPaths = React.useMemo(
-    () => new Set((attachments.data ?? []).map((a) => a.path)),
-    [attachments.data],
+    () =>
+      new Set(
+        (attachments.data ?? []).filter((a) => a.repo_id === repoId).map((a) => a.path),
+      ),
+    [attachments.data, repoId],
   );
 
   // REQ-6/AC-30: `resolveForAgent` filters disabled skills out of the
@@ -60,7 +72,11 @@ export function AgentsTab({ repoId, docs }: { repoId: string; docs: SpecFile[] }
       );
       return;
     }
-    const row = (attachments.data ?? []).find((a) => a.path === doc.path);
+    // Same pairing on the way out: without `repo_id` this DELETEs an
+    // attachment belonging to a repository the user is not looking at (F4).
+    const row = (attachments.data ?? []).find(
+      (a) => a.path === doc.path && a.repo_id === repoId,
+    );
     if (!row) return;
     detach.mutate(
       { id: row.id, repo_id: repoId, target_kind: "agent", target_id: agentId },

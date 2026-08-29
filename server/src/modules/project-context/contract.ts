@@ -126,6 +126,17 @@ export type ProjectionOrigin = z.infer<typeof ProjectionOrigin>;
 export const ProjectionEntry = z.object({
   path: z.string().min(1),
   /**
+   * The repository the path belongs to — NOT necessarily the repo the
+   * projection was computed for (fix-brief F2/F3).
+   *
+   * An agent can hold documents from several repositories, and the ones
+   * belonging to another repository are listed with `outcome: 'skipped'` rather
+   * than hidden. Without this field a consumer cannot tell those rows apart
+   * from a document that is simply missing, and `path` alone is not a unique
+   * key for the list: two repositories can each contain `docs/prd.md`.
+   */
+  repo_id: z.string().min(1),
+  /**
    * Direct attachment, or inherited from an enabled linked skill. Inherited
    * documents must not render as user-selected ones.
    */
@@ -139,14 +150,53 @@ export const ProjectionEntry = z.object({
 export type ProjectionEntry = z.infer<typeof ProjectionEntry>;
 
 /**
- * The projection for ONE agent — the basis of REQ-10. It is per agent and never
- * per page: two agents sharing a document can legitimately differ on whether it
- * survives, because survival depends on the agent's own attachments and enabled
- * skills.
+ * The identity of a resolved document: the repo it belongs to AND its path
+ * (fix-brief F3).
+ *
+ * A path alone is NOT an identity here — an agent can hold `docs/prd.md` from
+ * two different repositories, and a projection legitimately lists both (one
+ * injected, one skipped as cross-repo). Both server-side users of that identity
+ * call this — the dedupe below and the skip-reason map in `assemble.ts` — so
+ * they cannot disagree about what "the same document" means. The client mirrors
+ * the same tuple as its render key (`ProjectionSummary`), from the `repo_id`
+ * now carried on every projection entry.
+ *
+ * A NUL separator, because it is the one byte that cannot appear in either
+ * component: `isSafeRelPath` rejects any path containing one. A space would not
+ * do — paths with spaces are ordinary.
+ */
+export function attachmentKey(repoId: string, path: string): string {
+  return `${repoId}\u0000${path}`;
+}
+
+/**
+ * The projection for ONE agent AGAINST ONE REPOSITORY — the basis of REQ-10.
+ *
+ * It is per agent and never per page: two agents sharing a document can
+ * legitimately differ on whether it survives, because survival depends on the
+ * agent's own attachments and enabled skills.
+ *
+ * It is also per REPOSITORY (fix-brief F2), and that half was missing. AC-26
+ * requires the projection and the run to agree exactly, and a run always
+ * happens against one repository: `readAttachment` skips any document attached
+ * to a different repo BEFORE reading it (D-6), because resolving a same-named
+ * file from the repo under review would feed one project's spec into another's
+ * review. With no repository to compare against, the projection passed each
+ * attachment its OWN repo id as the repo under review, so that guard evaluated
+ * `x !== x` — permanently false, the branch dead — and a multi-repo agent's
+ * page showed documents the run would never send.
+ *
+ * The repo is supplied by the caller as a required `repo_id` query parameter
+ * and echoed here. Required rather than optional, and echoed rather than
+ * implied, for the same reason `agent_id` is: an unattributed projection is not
+ * interpretable, and a silent default would be a third set of semantics that
+ * no acceptance criterion covers.
  */
 export const Projection = z.object({
   /** A projection is meaningless unattributed, so this is required. */
   agent_id: z.string().min(1),
+  /** The repository the projection was computed against. */
+  repo_id: z.string().min(1),
   /** The section budget in force. Rendered rather than assumed. */
   budget_tokens: z.number().int().nonnegative(),
   /**

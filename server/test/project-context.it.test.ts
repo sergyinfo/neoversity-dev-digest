@@ -9,7 +9,11 @@ import { seed } from '../src/db/seed.js';
 import * as t from '../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { ContextDocList, Projection, AttachmentRow } from '../src/modules/project-context/contract.js';
-import { PROJECT_CONTEXT_TOKEN_BUDGET } from '../src/modules/project-context/constants.js';
+import {
+  MAX_ATTACHMENTS_PER_TARGET,
+  MAX_DOCS_PER_RESOLUTION,
+  PROJECT_CONTEXT_TOKEN_BUDGET,
+} from '../src/modules/project-context/constants.js';
 
 const hasDocker = await dockerAvailable();
 const d = hasDocker ? describe : describe.skip;
@@ -46,6 +50,7 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     await mkdir(join(clone, 'server', 'docs'), { recursive: true });
     await mkdir(join(clone, '.devdigest', 'specs'), { recursive: true });
     await mkdir(join(clone, 'src'), { recursive: true });
+    await mkdir(join(clone, '.git'), { recursive: true });
 
     await writeFile(join(clone, 'docs', 'a.md'), SMALL);
     await writeFile(join(clone, 'server', 'docs', 'b.md'), '# B\n\nnon-leading segment.\n');
@@ -55,6 +60,13 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     await writeFile(join(clone, 'src', 'notes.md'), '# notes');
     // AC-6 — over the 64 KB per-document cap.
     await writeFile(join(clone, 'docs', 'huge.md'), 'H'.repeat(64 * 1024 + 10));
+    // F1 — the real payload. `git clone` writes the tokenised remote URL into
+    // `.git/config` verbatim and nothing rewrites it afterwards, so a readable
+    // `.git/config` is a readable GitHub PAT.
+    await writeFile(
+      join(clone, '.git', 'config'),
+      '[remote "origin"]\n\turl = https://x-access-token:ghp_ITSECRET@github.com/a/b.git\n',
+    );
   });
 
   afterAll(async () => {
@@ -363,6 +375,107 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     await app.close();
   });
 
+  /**
+   * Fix-brief F1 — the allow-list is a security control, so it is enforced at
+   * every gate that feeds the model, not only in the walk.
+   *
+   * Both halves matter and they are separate defects. Refusing at attach stops
+   * new attachments; refusing at read is what makes an attachment STORED BEFORE
+   * the fix — or inserted by any other writer — harmless.
+   */
+  describe('F1 — a non-allow-listed path is refused at attach AND at read', () => {
+    const REFUSED = ['.git/config', '.env', 'README.md', 'src/notes.md', 'node_modules/evil/x.md'];
+
+    it('attach refuses each one with the 422 envelope, and stores nothing', async () => {
+      const app = await makeApp();
+      const repo = await makeRepo(clone);
+      const agent = await makeAgent(app, 'AllowListAttach');
+
+      for (const path of REFUSED) {
+        const res = await attach(app, {
+          path,
+          repo_id: repo.id,
+          target_kind: 'agent',
+          target_id: agent.id,
+        });
+        expect(res.statusCode).toBe(422);
+        expect(res.json().error.code).toBe('validation_error');
+        // §7 — the refusal names the path and a cause, never file content.
+        expect(res.payload).not.toContain('ITSECRET');
+      }
+
+      const listed = await app.inject({
+        method: 'GET',
+        url: `/context/attachments?target_kind=agent&target_id=${agent.id}`,
+      });
+      expect(listed.json()).toEqual([]);
+
+      await app.close();
+    });
+
+    it('a row stored BEFORE the fix is still not readable — the projection skips it', async () => {
+      const app = await makeApp();
+      const repo = await makeRepo(clone);
+      const agent = await makeAgent(app, 'AllowListRead');
+
+      // Straight into the table, bypassing `attach` entirely: this is exactly
+      // the state a pre-fix attach left behind, and the state the read gate
+      // must be independently able to refuse.
+      for (const [i, path] of REFUSED.entries()) {
+        await pg.handle.db.insert(t.contextAttachments).values({
+          workspaceId,
+          repoId: repo.id,
+          agentId: agent.id,
+          path,
+          order: i,
+        });
+      }
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const projection = Projection.parse(res.json());
+
+      // Every one refused, nothing injected, and no section at all.
+      expect(projection.entries.map((e) => e.path).sort()).toEqual([...REFUSED].sort());
+      expect(projection.entries.every((e) => e.outcome === 'skipped')).toBe(true);
+      expect(projection.projected_tokens).toBe(0);
+      // The assertion that actually matters: the PAT is not in the response.
+      expect(res.payload).not.toContain('ITSECRET');
+      expect(res.payload).not.toContain('ghp_');
+
+      await app.close();
+    });
+
+    it('an allow-listed document in the same repo is unaffected', async () => {
+      const app = await makeApp();
+      const repo = await makeRepo(clone);
+      const agent = await makeAgent(app, 'AllowListControl');
+
+      const ok = await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      expect(ok.statusCode).toBe(201);
+
+      const projection = Projection.parse(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+          })
+        ).json(),
+      );
+      expect(projection.entries.map((e) => e.outcome)).toEqual(['injected']);
+
+      await app.close();
+    });
+  });
+
   // --------------------------------------------------------------- projection
 
   it('AC-17 (server half) — the projection covers direct + inherited documents, wrappers and the heading', async () => {
@@ -388,7 +501,7 @@ d('L05 project-context routes (Testcontainers pg)', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: `/agents/${agent.id}/context/projection`,
+      url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
     });
     expect(res.statusCode).toBe(200);
     const projection = Projection.parse(res.json());
@@ -442,14 +555,14 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     });
 
     const enabled = Projection.parse(
-      (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection` })).json(),
+      (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
     );
     expect(enabled.entries.map((e) => e.path)).toEqual(['docs/a.md', 'server/docs/b.md']);
 
     await pg.handle.db.update(t.skills).set({ enabled: false }).where(eq(t.skills.id, skill.id));
 
     const disabled = Projection.parse(
-      (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection` })).json(),
+      (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
     );
     // The filter is in SQL (`skills.enabled = true`), so the inherited document
     // is not merely marked — it never enters the projection at all.
@@ -475,7 +588,7 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     }
 
     const projection = Projection.parse(
-      (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection` })).json(),
+      (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
     );
     expect(projection.entries.map((e) => e.outcome)).toEqual(['injected', 'dropped_budget']);
     expect(projection.projected_tokens).toBeLessThanOrEqual(PROJECT_CONTEXT_TOKEN_BUDGET);
@@ -522,10 +635,10 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     });
 
     const forA = Projection.parse(
-      (await app.inject({ method: 'GET', url: `/agents/${agentA.id}/context/projection` })).json(),
+      (await app.inject({ method: 'GET', url: `/agents/${agentA.id}/context/projection?repo_id=${repo.id}` })).json(),
     );
     const forB = Projection.parse(
-      (await app.inject({ method: 'GET', url: `/agents/${agentB.id}/context/projection` })).json(),
+      (await app.inject({ method: 'GET', url: `/agents/${agentB.id}/context/projection?repo_id=${repo.id}` })).json(),
     );
 
     const inA = forA.entries.find((e) => e.path === 'docs/shared/shared.md')!;
@@ -537,6 +650,289 @@ d('L05 project-context routes (Testcontainers pg)', () => {
     expect(inB.origin).toBe('skill');
 
     await rm(join(clone, 'docs', 'shared'), { recursive: true, force: true });
+    await app.close();
+  });
+
+  /**
+   * Fix-brief F2 — the projection must know which repository it is FOR.
+   *
+   * Before the fix `projectForAgent` passed each attachment its own repo id as
+   * "the repo under review", so `readAttachment`'s cross-repo guard evaluated
+   * `x !== x` — permanently false. A multi-repo agent's page therefore promised
+   * to inject documents a run would skip, and `ProjectionOutcome.skipped`
+   * could never be emitted for its documented "wrong repo" cause.
+   */
+  describe('F2 — the projection is per repository', () => {
+    it('a document attached against ANOTHER repo is skipped, not injected', async () => {
+      const app = await makeApp();
+      const repoA = await makeRepo(clone);
+      const repoB = await makeRepo(clone);
+      const agent = await makeAgent(app, 'MultiRepo');
+
+      // The SAME clone behind both repo rows, so the file is genuinely readable
+      // for either — the skip can only come from the repo comparison, never
+      // from the document being missing.
+      await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repoA.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      await attach(app, {
+        path: 'server/docs/b.md',
+        repo_id: repoB.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+
+      const forA = Projection.parse(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/agents/${agent.id}/context/projection?repo_id=${repoA.id}`,
+          })
+        ).json(),
+      );
+      expect(forA.repo_id).toBe(repoA.id);
+      expect(forA.entries.map((e) => [e.path, e.outcome])).toEqual([
+        ['docs/a.md', 'injected'],
+        ['server/docs/b.md', 'skipped'],
+      ]);
+
+      // ...and the mirror image for the other repo, so this is a real
+      // per-repo computation rather than "the second one is always skipped".
+      const forB = Projection.parse(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/agents/${agent.id}/context/projection?repo_id=${repoB.id}`,
+          })
+        ).json(),
+      );
+      expect(forB.entries.map((e) => [e.path, e.outcome])).toEqual([
+        ['docs/a.md', 'skipped'],
+        ['server/docs/b.md', 'injected'],
+      ]);
+
+      // The two totals differ, because different documents survive.
+      expect(forA.projected_tokens).not.toBe(forB.projected_tokens);
+      // Every entry names its own repository (F3's render-key half).
+      expect(forA.entries.map((e) => e.repo_id)).toEqual([repoA.id, repoB.id]);
+
+      await app.close();
+    });
+
+    it('repo_id is required — a projection with no repository is a 422, not a guess', async () => {
+      const app = await makeApp();
+      const agent = await makeAgent(app, 'NoRepoProjection');
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${agent.id}/context/projection`,
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('validation_error');
+
+      await app.close();
+    });
+
+    it('a repo from another workspace is a 404, never a 403 or an empty projection', async () => {
+      const app = await makeApp();
+      const [otherWs] = await pg.handle.db
+        .insert(t.workspaces)
+        .values({ name: `other-proj-${repoSeq}` })
+        .returning();
+      const foreign = await makeRepo(clone, otherWs!.id);
+      const agent = await makeAgent(app, 'ForeignRepoProjection');
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${agent.id}/context/projection?repo_id=${foreign.id}`,
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('not_found');
+
+      await app.close();
+    });
+  });
+
+  /**
+   * Fix-brief F3 — the two partial unique indexes are PER TARGET KIND, so the
+   * same document can legitimately be attached directly to an agent AND to a
+   * skill it links. `resolveForAgent` concatenated both lists with no dedupe, so
+   * the run rendered it twice as `spec-0` and `spec-1` with byte-identical
+   * bodies and paid the budget twice — while `usageCounts` deduped the same
+   * configuration for display, so the page said 1 and the run sent 2.
+   */
+  it('F3 — a document reachable directly AND through a skill appears exactly once', async () => {
+    const app = await makeApp();
+    const repo = await makeRepo(clone);
+    const agent = await makeAgent(app, 'DedupeAgent');
+    const skill = await makeSkill(`dedupe-skill-${repoSeq}`);
+    await app.inject({
+      method: 'POST',
+      url: `/agents/${agent.id}/skills`,
+      payload: { skill_id: skill.id },
+    });
+
+    // The same path on both targets — allowed by the schema, and the exact
+    // configuration that produced the duplicate.
+    for (const target of [
+      { target_kind: 'agent', target_id: agent.id },
+      { target_kind: 'skill', target_id: skill.id },
+    ]) {
+      const res = await attach(app, { path: 'docs/a.md', repo_id: repo.id, ...target });
+      expect(res.statusCode).toBe(201);
+    }
+
+    const projection = Projection.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+        })
+      ).json(),
+    );
+
+    expect(projection.entries).toHaveLength(1);
+    // The DIRECT attachment wins: it is the user's explicit choice for this
+    // agent, and reporting it as inherited would mean detaching the skill did
+    // not remove it.
+    expect(projection.entries[0]).toMatchObject({
+      path: 'docs/a.md',
+      origin: 'agent',
+      outcome: 'injected',
+    });
+    expect(projection.entries[0]!.via_skill_id).toBeFalsy();
+
+    // The budget is charged once. Compared against an agent holding the single
+    // document directly and nothing else — the same document, one copy.
+    const solo = await makeAgent(app, 'SoloAgent');
+    await attach(app, {
+      path: 'docs/a.md',
+      repo_id: repo.id,
+      target_kind: 'agent',
+      target_id: solo.id,
+    });
+    const soloProjection = Projection.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/agents/${solo.id}/context/projection?repo_id=${repo.id}`,
+        })
+      ).json(),
+    );
+    expect(projection.projected_tokens).toBe(soloProjection.projected_tokens);
+
+    // ...and the page agrees: `usageCounts` counts DISTINCT agents, so this
+    // document is used by two agents, not three.
+    const list = ContextDocList.parse(
+      (await app.inject({ method: 'GET', url: `/repos/${repo.id}/context` })).json(),
+    );
+    expect(list.files.find((f) => f.path === 'docs/a.md')!.used_by_count).toBe(2);
+
+    await app.close();
+  });
+
+  /**
+   * Fix-brief F5 — the per-target cap of 20 does NOT bound a resolution, because
+   * an agent resolves its own 20 plus 20 per enabled linked skill and `linkSkill`
+   * is an unbounded upsert. `MAX_DOCS_PER_RESOLUTION` is the bound that does not
+   * grow with the skill count.
+   */
+  it('F5 — the number of documents read is bounded by MAX_DOCS_PER_RESOLUTION, not by the skill count', async () => {
+    const app = await makeApp();
+    const repo = await makeRepo(clone);
+    const agent = await makeAgent(app, 'ManySkillsAgent');
+
+    // 20 direct + 3 skills × 20 inherited = 80 attachments, all pointing at
+    // REAL, readable, allow-listed, well-under-budget documents. If the bound
+    // were not applied every one of them would be read and injected.
+    const perTarget = MAX_ATTACHMENTS_PER_TARGET;
+    await mkdir(join(clone, 'docs', 'many'), { recursive: true });
+    const rows: Array<Record<string, unknown>> = [];
+    let n = 0;
+    const addDocs = async (target: { agentId?: string; skillId?: string }) => {
+      for (let i = 0; i < perTarget; i++) {
+        const rel = `docs/many/d-${String(n).padStart(3, '0')}.md`;
+        await writeFile(join(clone, rel), `# ${n}\n`);
+        rows.push({ workspaceId, repoId: repo.id, path: rel, order: i, ...target });
+        n++;
+      }
+    };
+    await addDocs({ agentId: agent.id });
+    for (let sk = 0; sk < 3; sk++) {
+      const skill = await makeSkill(`bound-skill-${repoSeq}-${sk}`);
+      await app.inject({
+        method: 'POST',
+        url: `/agents/${agent.id}/skills`,
+        payload: { skill_id: skill.id },
+      });
+      await addDocs({ skillId: skill.id });
+    }
+    // Inserted directly: this test is about RESOLUTION, and 80 HTTP attaches
+    // would just be 80 more clone reads that prove nothing.
+    await pg.handle.db.insert(t.contextAttachments).values(rows as never);
+    expect(rows).toHaveLength(perTarget * 4);
+
+    const projection = Projection.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+        })
+      ).json(),
+    );
+
+    // Every attachment is still LISTED — a silently shortened list is the
+    // invisible failure this feature exists to remove.
+    expect(projection.entries).toHaveLength(perTarget * 4);
+
+    const considered = projection.entries.filter((e) => e.outcome !== 'skipped');
+    const overLimit = projection.entries.filter(
+      (e) => e.outcome === 'skipped',
+    );
+    expect(considered).toHaveLength(MAX_DOCS_PER_RESOLUTION);
+    expect(overLimit).toHaveLength(perTarget * 4 - MAX_DOCS_PER_RESOLUTION);
+
+    // The cut falls at the TAIL of injection order — the agent's own 20 are all
+    // considered, and what is dropped is the furthest-inherited.
+    expect(projection.entries.slice(0, MAX_DOCS_PER_RESOLUTION).every((e) => e.outcome !== 'skipped')).toBe(true);
+
+    // The bound does not grow with the skill count: a fourth skill adds 20 more
+    // attachments and not one more read.
+    const extra = await makeSkill(`bound-skill-${repoSeq}-extra`);
+    await app.inject({
+      method: 'POST',
+      url: `/agents/${agent.id}/skills`,
+      payload: { skill_id: extra.id },
+    });
+    const extraRows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < perTarget; i++) {
+      const rel = `docs/many/d-${String(n).padStart(3, '0')}.md`;
+      await writeFile(join(clone, rel), `# ${n}\n`);
+      extraRows.push({ workspaceId, repoId: repo.id, path: rel, order: i, skillId: extra.id });
+      n++;
+    }
+    await pg.handle.db.insert(t.contextAttachments).values(extraRows as never);
+
+    const after = Projection.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+        })
+      ).json(),
+    );
+    expect(after.entries).toHaveLength(perTarget * 5);
+    expect(after.entries.filter((e) => e.outcome !== 'skipped')).toHaveLength(
+      MAX_DOCS_PER_RESOLUTION,
+    );
+    // ...and the same documents survive, so the added skill changed nothing
+    // about what the run would send.
+    expect(after.projected_tokens).toBe(projection.projected_tokens);
+
+    await rm(join(clone, 'docs', 'many'), { recursive: true, force: true });
     await app.close();
   });
 
@@ -556,7 +952,7 @@ d('L05 project-context routes (Testcontainers pg)', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: `/agents/${agent.id}/context/projection`,
+      url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
     });
     expect(res.statusCode).toBe(200);
     const projection = Projection.parse(res.json());

@@ -23,9 +23,19 @@ export function SkillsTab({ repoId, docs }: { repoId: string; docs: SpecFile[] }
   const attach = useAttachContextDoc();
   const detach = useDetachContextDoc();
 
+  /**
+   * Scoped to the active repo, exactly as `AgentsTab` is and for the same
+   * reason (fix-brief F4): `listForTarget` returns this skill's attachments
+   * across every repository, while the document list on screen is one repo's.
+   * The `contribution` figure below reads this set, so it was over-counting a
+   * multi-repo skill too.
+   */
   const attachedPaths = React.useMemo(
-    () => new Set((attachments.data ?? []).map((a) => a.path)),
-    [attachments.data],
+    () =>
+      new Set(
+        (attachments.data ?? []).filter((a) => a.repo_id === repoId).map((a) => a.path),
+      ),
+    [attachments.data, repoId],
   );
 
   /**
@@ -68,7 +78,9 @@ export function SkillsTab({ repoId, docs }: { repoId: string; docs: SpecFile[] }
       );
       return;
     }
-    const row = (attachments.data ?? []).find((a) => a.path === doc.path);
+    const row = (attachments.data ?? []).find(
+      (a) => a.path === doc.path && a.repo_id === repoId,
+    );
     if (!row) return;
     detach.mutate(
       { id: row.id, repo_id: repoId, target_kind: "skill", target_id: skillId },

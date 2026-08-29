@@ -16,7 +16,8 @@ import {
  * L05 — project-context module.
  *
  *   GET    /repos/:id/context              → discovered documents, read live
- *   GET    /agents/:id/context/projection  → REQ-10's per-agent projection
+ *   GET    /agents/:id/context/projection?repo_id=  → REQ-10's per-agent,
+ *                                            per-repo projection
  *   GET    /context/attachments            → attachments on one target
  *   POST   /context/attachments            → attach
  *   PATCH  /context/attachments/:id        → reorder
@@ -50,6 +51,9 @@ const ListAttachmentsQuery = z.object({
 
 const ReorderBody = z.object({ order: z.number().int().min(0) });
 
+/** The repository a projection is computed against (F2). See the route below. */
+const ProjectionQuery = z.object({ repo_id: z.string().min(1) });
+
 export default async function projectContextRoutes(appBase: FastifyInstance) {
   const app = appBase.withTypeProvider<ZodTypeProvider>();
   const service = new ProjectContextService(app.container);
@@ -73,13 +77,23 @@ export default async function projectContextRoutes(appBase: FastifyInstance) {
     return list;
   });
 
-  /** REQ-10 — the per-agent projection, computed through the shared assembler. */
+  /**
+   * REQ-10 — the per-agent projection, computed through the shared assembler.
+   *
+   * `repo_id` is REQUIRED (fix-brief F2). A projection is "what a run against
+   * THIS repository would send", and the cross-repo skip a run applies (D-6)
+   * cannot be evaluated without naming that repository. Missing it is a 422
+   * through the standard validation envelope rather than a default, because
+   * every available default — the attachment's own repo, the first repo, the
+   * only repo — silently answers a different question than the one AC-26
+   * compares against.
+   */
   app.get(
     '/agents/:id/context/projection',
-    { schema: { params: IdParams } },
+    { schema: { params: IdParams, querystring: ProjectionQuery } },
     async (req): Promise<Projection> => {
       const { workspaceId } = await getContext(app.container, req);
-      return service.projectForAgent(workspaceId, req.params.id);
+      return service.projectForAgent(workspaceId, req.params.id, req.query.repo_id);
     },
   );
 

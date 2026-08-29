@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   discoverDocs,
+  isDiscoverableDocPath,
   isSafeRelPath,
   readDoc,
   resolveCloneRoot,
@@ -45,6 +46,7 @@ beforeAll(async () => {
   await mkdir(join(root, '.devdigest', 'specs'), { recursive: true });
   await mkdir(join(root, 'src'), { recursive: true });
   await mkdir(join(root, 'node_modules', 'pkg', 'docs'), { recursive: true });
+  await mkdir(join(root, '.git'), { recursive: true });
   await mkdir(outside, { recursive: true });
 
   // Both roots are REALPATH'd, because that is what `resolveCloneRoot` hands
@@ -67,6 +69,15 @@ beforeAll(async () => {
   await writeFile(join(root, 'src', 'notes.md'), '# notes — not under a doc directory');
   await writeFile(join(root, 'node_modules', 'pkg', 'docs', 'x.md'), '# excluded directory');
   await writeFile(join(root, 'docs', 'diagram.png'), 'not markdown');
+
+  // F1 — the payload the security review actually extracted. `git clone` writes
+  // the tokenised remote URL into `.git/config` verbatim and nothing rewrites
+  // it afterwards, so this is the real file, not a stand-in.
+  await writeFile(
+    join(root, '.git', 'config'),
+    '[remote "origin"]\n\turl = https://x-access-token:ghp_PLANTEDSECRET@github.com/a/b.git\n',
+  );
+  await writeFile(join(root, '.env'), 'OPENAI_API_KEY=sk-PLANTEDSECRET\n');
 
   // The escape this module exists to close: a directory symlink out of the
   // clone, under an allow-listed segment, with no `..`, nothing absolute and no
@@ -282,6 +293,72 @@ describe('containment gate', () => {
 
     await rm(join(root, 'docs', 'big.md'), { force: true });
     await rm(join(root, 'docs', 'blank.md'), { force: true });
+  });
+});
+
+/**
+ * Fix-brief F1 — the read gate must enforce the ALLOW-LIST, not only
+ * containment.
+ *
+ * Before this fix the `.md`/`.mdx` filter, the doc-directory allow-list and the
+ * `EXCLUDED_DIRS` skip lived only inside `walkDir`, so `readDoc` happily
+ * returned `.git/config` — which carries the PAT `withGitHubToken` embeds in
+ * the clone URL — straight into a model prompt and a persisted trace. The walk
+ * listing none of these files was never the guarantee; it was the only place
+ * the rule was applied.
+ */
+describe('F1 — a path the walk would not list is not readable either', () => {
+  const refused = [
+    '.git/config',
+    '.env',
+    'README.md',
+    'src/notes.md',
+    'node_modules/pkg/docs/x.md',
+    'docs/diagram.png',
+  ];
+
+  it('the walk lists none of them', async () => {
+    const paths = (await discoverDocs(root, tokenizer)).files.map((f) => f.path);
+    for (const rel of refused) expect(paths).not.toContain(rel);
+  });
+
+  it('...and the READ gate refuses every one, so a pre-fix attachment is unreadable', async () => {
+    for (const rel of refused) {
+      expect(isDiscoverableDocPath(rel)).toBe(false);
+      expect(await safeDocPath(root, rel)).toBeNull();
+      const read = await readDoc(root, rel);
+      expect(read).toEqual({ ok: false, reason: 'unsafe_path' });
+    }
+  });
+
+  it('no refused read can leak the secret it was pointed at', async () => {
+    // The two that actually hold one on disk. `JSON.stringify` of the whole
+    // result, so a leak through any field — content, a reason, a path echo —
+    // fails this rather than only the shape we happened to assert above.
+    for (const rel of ['.git/config', '.env']) {
+      expect(JSON.stringify(await readDoc(root, rel))).not.toContain('PLANTEDSECRET');
+    }
+  });
+
+  it('the containment escape and the allow-list are INDEPENDENT gates', async () => {
+    // `.git/config` is perfectly contained — `realpath` resolves it inside the
+    // clone — so containment alone can never refuse it. That is why F1 was
+    // invisible to the traversal tests above, which all still pass.
+    expect(isSafeRelPath('.git/config')).toBe(true);
+    expect(await realpath(join(root, '.git', 'config'))).toContain(root);
+
+    // ...and conversely a doc that IS allow-listed but escapes is still refused
+    // by containment (the existing symlink cases, restated as one assertion so
+    // deleting either gate fails a test).
+    expect(isDiscoverableDocPath('docs/vendor-notes/passwd.md')).toBe(true);
+    expect(await safeDocPath(root, 'docs/vendor-notes/passwd.md')).toBeNull();
+  });
+
+  it('a legitimate document is unaffected by the new gate', async () => {
+    for (const rel of ['docs/a.md', 'server/docs/b.md', '.devdigest/specs/prd.md', 'docs/notes.mdx']) {
+      expect(isDiscoverableDocPath(rel)).toBe(true);
+      expect(await safeDocPath(root, rel)).not.toBeNull();
+    }
   });
 });
 

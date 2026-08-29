@@ -9,7 +9,7 @@
  * silently vanishing (REQ-6/AC-30).
  */
 import type { ReactElement } from "react";
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import messages from "../../../messages/en/context.json";
@@ -33,13 +33,15 @@ describe("ProjectionSummary — AC-17: an agent with direct + inherited attachme
   // component ever starts summing rows itself, this is what would catch it.
   const projection: Projection = {
     agent_id: "agent-1",
+    repo_id: "repo-1",
     budget_tokens: 8000,
     projected_tokens: 4230,
     entries: [
-      { path: "docs/a.md", origin: "agent", tokens_estimate: 1000, outcome: "injected" },
-      { path: "docs/b.md", origin: "agent", tokens_estimate: 1200, outcome: "injected" },
+      { path: "docs/a.md", repo_id: "repo-1", origin: "agent", tokens_estimate: 1000, outcome: "injected" },
+      { path: "docs/b.md", repo_id: "repo-1", origin: "agent", tokens_estimate: 1200, outcome: "injected" },
       {
         path: "server/docs/c.md",
+        repo_id: "repo-1",
         origin: "skill",
         via_skill_id: "skill-1",
         tokens_estimate: 900,
@@ -77,9 +79,10 @@ describe("ProjectionSummary — AC-28: no agent in view", () => {
   it("ignores a stale projection payload while no agent is in view", () => {
     const stale: Projection = {
       agent_id: "agent-1",
+      repo_id: "repo-1",
       budget_tokens: 8000,
       projected_tokens: 1000,
-      entries: [{ path: "docs/a.md", origin: "agent", tokens_estimate: 1000, outcome: "injected" }],
+      entries: [{ path: "docs/a.md", repo_id: "repo-1", origin: "agent", tokens_estimate: 1000, outcome: "injected" }],
     };
     renderSummary(<ProjectionSummary hasAgent={false} projection={stale} />);
     expect(screen.getByText(/Choose an agent/)).toBeInTheDocument();
@@ -90,12 +93,13 @@ describe("ProjectionSummary — AC-28: no agent in view", () => {
 describe("ProjectionSummary — AC-30: every linked skill disabled", () => {
   const directOnly: Projection = {
     agent_id: "agent-2",
+    repo_id: "repo-1",
     budget_tokens: 8000,
     projected_tokens: 500,
     // No skill-origin entries: S6's `resolveForAgent` filters disabled skills
     // out of the projection in SQL, so a disabled skill's documents never
     // reach `entries` at all.
-    entries: [{ path: "docs/direct-only.md", origin: "agent", tokens_estimate: 500, outcome: "injected" }],
+    entries: [{ path: "docs/direct-only.md", repo_id: "repo-1", origin: "agent", tokens_estimate: 500, outcome: "injected" }],
   };
 
   it("counts only the direct attachments", () => {
@@ -137,5 +141,44 @@ describe("ProjectionSummary — degraded projection (§9)", () => {
     );
     expect(container.querySelectorAll(".skeleton").length).toBeGreaterThan(0);
     expect(screen.queryByText(/isn’t available/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Fix-brief F3, first knock-on. `key={entry.path}` collided for two entries
+ * sharing a path — the duplicate the server used to emit, and, still, a
+ * multi-repo agent's `docs/prd.md` from two repositories, one injected and one
+ * skipped as cross-repo. React drops one of a duplicated key pair and warns, so
+ * the user sees one row where the projection has two.
+ */
+describe("ProjectionSummary — F3: two entries sharing a path render as two rows", () => {
+  const twoRepos: Projection = {
+    agent_id: "agent-3",
+    repo_id: "repo-1",
+    budget_tokens: 8000,
+    projected_tokens: 700,
+    entries: [
+      { path: "docs/prd.md", repo_id: "repo-1", origin: "agent", tokens_estimate: 700, outcome: "injected" },
+      // The same path, attached against a different repository: a run against
+      // repo-1 skips it, so it is listed as skipped rather than hidden.
+      { path: "docs/prd.md", repo_id: "repo-2", origin: "agent", outcome: "skipped" },
+    ],
+  };
+
+  it("renders both rows, with distinct outcomes", () => {
+    renderSummary(<ProjectionSummary hasAgent projection={twoRepos} />);
+    expect(screen.getAllByText("docs/prd.md")).toHaveLength(2);
+    expect(screen.getByText("Injected")).toBeInTheDocument();
+    expect(screen.getByText("Skipped")).toBeInTheDocument();
+  });
+
+  it("logs no duplicate-key warning", () => {
+    // React reports a duplicated key through `console.error`, so a spy on it is
+    // the mechanical detector — the row count alone can pass while React warns.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderSummary(<ProjectionSummary hasAgent projection={twoRepos} />);
+    const warnings = spy.mock.calls.map((c) => String(c[0]));
+    expect(warnings.filter((w) => /same key|duplicate/i.test(w))).toEqual([]);
+    spy.mockRestore();
   });
 });

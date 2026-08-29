@@ -8,10 +8,17 @@ import {
   type AssembleResult,
   type ResolvedDoc,
 } from './assemble.js';
-import { discoverDocs, isSafeRelPath, readDoc, resolveCloneRoot } from './discovery.js';
+import {
+  discoverDocs,
+  isDiscoverableDocPath,
+  isSafeRelPath,
+  readDoc,
+  resolveCloneRoot,
+} from './discovery.js';
 import {
   MAX_ATTACHMENTS_PER_TARGET,
   MAX_DOC_BYTES,
+  MAX_DOCS_PER_RESOLUTION,
   PROJECT_CONTEXT_TOKEN_BUDGET,
 } from './constants.js';
 import type {
@@ -41,7 +48,25 @@ export interface RunContext extends AssembleResult {
   specsRead: string[];
 }
 
-export class ProjectContextService {
+/**
+ * What CONSUMING modules may reach through the container (fix-brief F6).
+ *
+ * Deliberately narrow: `run-executor` needs exactly one method, and a
+ * container slot typed as the whole class would force a test stub to
+ * reimplement the repository too — which is the injection seam the finding is
+ * about. Same shape as `RepoIntel` (`repo-intel/types.ts`), for the same
+ * reason. This module's own routes construct `ProjectContextService` directly,
+ * which is a module using its own service, not a cross-module reach.
+ */
+export interface ProjectContext {
+  resolveFor(
+    workspaceId: string,
+    agentId: string,
+    repo: { id: string; clonePath: string | null },
+  ): Promise<RunContext>;
+}
+
+export class ProjectContextService implements ProjectContext {
   private repo: ProjectContextRepository;
 
   constructor(private container: Container) {
@@ -116,6 +141,17 @@ export class ProjectContextService {
     // path and the clone moves under it (TOCTOU across a resync).
     if (!isSafeRelPath(input.path)) {
       throw new ValidationError('Invalid document path', { path: input.path });
+    }
+    // REQ-2's OTHER half (fix-brief F1): a path the walk would never list must
+    // not be attachable. Without this, `.git/config` — which carries the PAT
+    // that `withGitHubToken` embeds in the clone URL — is a valid attachment,
+    // and the next run puts it in the prompt and in the persisted trace.
+    // Refused here as well as at the read, so it never reaches the table at all.
+    if (!isDiscoverableDocPath(input.path)) {
+      throw new ValidationError(
+        'That path is not a discoverable documentation file for this repository',
+        { path: input.path },
+      );
     }
 
     const repo = await this.repo.getRepo(workspaceId, input.repo_id);
@@ -193,9 +229,13 @@ export class ProjectContextService {
   /**
    * Resolve, read and assemble everything one agent would send for a given repo.
    *
-   * THE shared path: the projection route calls it with the repo the user is
-   * looking at, and `run-executor` calls it with the repo under review. AC-26
-   * and AC-27 are true because there is one function here, not two.
+   * THE shared path, and after fix-brief F2 it is genuinely the only one: the
+   * projection route calls it with the repo the user is looking at, and
+   * `run-executor` calls it with the repo under review. AC-26 and AC-27 are
+   * true because there is one function here, not two — `projectForAgent` below
+   * is now a thin wrapper over this rather than a parallel implementation that
+   * resolved each attachment against its OWN repo and so could never apply the
+   * cross-repo skip.
    *
    * A failure to resolve the clone root is NOT thrown: `clone_missing` means
    * every document is skipped and the caller still completes (§6, "Every
@@ -211,8 +251,30 @@ export class ProjectContextService {
     const root = await resolveCloneRoot(repo.clonePath);
 
     const docs: ResolvedDoc[] = [];
-    for (const att of attachments) {
-      docs.push(await this.readAttachment(att, repo.id, root.ok ? root.root : null, root.ok ? null : root.reason));
+    for (const [i, att] of attachments.entries()) {
+      // F5's bound, applied BEFORE the read so an over-limit document costs no
+      // `stat`, no 64 KB read and no tokenizer pass. It is still LISTED, with a
+      // reason, exactly like every other skip — silently dropping documents the
+      // user attached is the invisible failure this feature exists to remove.
+      if (i >= MAX_DOCS_PER_RESOLUTION) {
+        docs.push({
+          path: att.path,
+          repoId: att.repoId,
+          origin: att.origin,
+          viaSkillId: att.viaSkillId,
+          content: null,
+          skipReason: `over the ${MAX_DOCS_PER_RESOLUTION}-document per-resolution limit`,
+        });
+        continue;
+      }
+      docs.push(
+        await this.readAttachment(
+          att,
+          repo.id,
+          root.ok ? root.root : null,
+          root.ok ? null : root.reason,
+        ),
+      );
     }
 
     const result = assembleProjectContext(docs, this.container.tokenizer, {
@@ -222,41 +284,42 @@ export class ProjectContextService {
     return { ...result, specsRead: specsReadFor(result) };
   }
 
-  /** REQ-10's projection for one agent, computed through the same path. */
-  async projectForAgent(workspaceId: string, agentId: string): Promise<Projection> {
+  /**
+   * REQ-10's projection for one agent, AGAINST ONE REPOSITORY, computed through
+   * the same path the run uses (fix-brief F2).
+   *
+   * `repoId` is the repo the projection is for — the one whose PR would be
+   * reviewed — and is required. It is what makes the D-6 cross-repo skip
+   * reachable here: documents attached against another repository are listed as
+   * `skipped`, which is what a run would do with them, instead of being
+   * projected as if they would be injected.
+   *
+   * The delegation is the point. Any future divergence between "what the page
+   * projects" and "what the run sends" now has to be introduced deliberately,
+   * in one function, rather than by forgetting to mirror a change in the
+   * second copy.
+   */
+  async projectForAgent(
+    workspaceId: string,
+    agentId: string,
+    repoId: string,
+  ): Promise<Projection> {
     if (!(await this.repo.targetExists(workspaceId, 'agent', agentId))) {
       throw new NotFoundError('Agent not found');
     }
+    // A 404, never a 403, and never a silent empty projection: a repo id the
+    // workspace does not own must not be answerable at all.
+    const repo = await this.repo.getRepo(workspaceId, repoId);
+    if (!repo) throw new NotFoundError('Repo not found');
 
-    const attachments = await this.repo.resolveForAgent(workspaceId, agentId);
-    // Every attachment names its own repo (D-6), and an agent can hold
-    // documents from more than one. Resolve each attachment against ITS repo.
-    const repoIds = [...new Set(attachments.map((a) => a.repoId))];
-    const roots = new Map<string, string | null>();
-    const reasons = new Map<string, 'not_cloned' | 'clone_missing'>();
-    for (const repoId of repoIds) {
-      const repo = await this.repo.getRepo(workspaceId, repoId);
-      const root = repo ? await resolveCloneRoot(repo.clonePath) : { ok: false as const, reason: 'not_cloned' as const };
-      if (root.ok) roots.set(repoId, root.root);
-      else {
-        roots.set(repoId, null);
-        reasons.set(repoId, root.reason);
-      }
-    }
-
-    const docs: ResolvedDoc[] = [];
-    for (const att of attachments) {
-      docs.push(
-        await this.readAttachment(att, att.repoId, roots.get(att.repoId) ?? null, reasons.get(att.repoId) ?? null),
-      );
-    }
-
-    const result = assembleProjectContext(docs, this.container.tokenizer, {
-      budgetTokens: PROJECT_CONTEXT_TOKEN_BUDGET,
+    const result = await this.resolveFor(workspaceId, agentId, {
+      id: repo.id,
+      clonePath: repo.clonePath,
     });
 
     return {
       agent_id: agentId,
+      repo_id: repo.id,
       budget_tokens: PROJECT_CONTEXT_TOKEN_BUDGET,
       // NOT the sum of the entries: it includes the wrappers and the heading.
       // The same number the run records (BQ-1/a), which is what AC-26 asserts.
@@ -278,7 +341,12 @@ export class ProjectContextService {
     root: string | null,
     rootReason: 'not_cloned' | 'clone_missing' | null,
   ): Promise<ResolvedDoc> {
-    const base = { path: att.path, origin: att.origin, viaSkillId: att.viaSkillId };
+    const base = {
+      path: att.path,
+      repoId: att.repoId,
+      origin: att.origin,
+      viaSkillId: att.viaSkillId,
+    };
 
     // D-6 — cross-repo. Skipped through the same path as a missing file, and
     // crucially BEFORE any read: resolving a same-named file from the repo under

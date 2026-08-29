@@ -143,6 +143,7 @@ describe('AttachmentInput / AttachmentRow', () => {
 describe('Projection', () => {
   const entry = {
     path: '.devdigest/specs/prd.md',
+    repo_id: 'repo-1',
     origin: 'agent',
     via_skill_id: null,
     tokens_estimate: 2100,
@@ -152,23 +153,44 @@ describe('Projection', () => {
   it('parses a projection whose entries mix direct and inherited documents', () => {
     const projection = Projection.parse({
       agent_id: 'agent-1',
+      repo_id: 'repo-1',
       budget_tokens: 8000,
       projected_tokens: 6400,
       entries: [
         entry,
         {
           path: 'server/docs/intent-layer.md',
+          repo_id: 'repo-1',
           origin: 'skill',
           via_skill_id: 'skill-7',
           tokens_estimate: 4200,
           outcome: 'dropped_budget',
         },
         // Unmeasurable and unreadable: skipped, with no estimate at all.
-        { path: 'gone.md', origin: 'agent', outcome: 'skipped' },
+        { path: 'gone.md', repo_id: 'repo-1', origin: 'agent', outcome: 'skipped' },
+        // F2/F3 — a document attached against ANOTHER repository. It is listed,
+        // as `skipped`, and `repo_id` is the only thing that says why: without
+        // it this row is indistinguishable from `gone.md` above, and `path`
+        // alone is not a unique key across the list.
+        {
+          path: '.devdigest/specs/prd.md',
+          repo_id: 'repo-2',
+          origin: 'agent',
+          outcome: 'skipped',
+        },
       ],
     });
 
-    expect(projection.entries.map((e) => e.outcome)).toEqual(['injected', 'dropped_budget', 'skipped']);
+    expect(projection.entries.map((e) => e.outcome)).toEqual([
+      'injected',
+      'dropped_budget',
+      'skipped',
+      'skipped',
+    ]);
+    // Two entries, same path, different repositories — the pair a path-keyed
+    // dedupe or render key collapses (F3).
+    const prd = projection.entries.filter((e) => e.path === '.devdigest/specs/prd.md');
+    expect(prd.map((e) => e.repo_id)).toEqual(['repo-1', 'repo-2']);
     expect(projection.entries[1]?.via_skill_id).toBe('skill-7');
     expect(projection.entries[2]?.tokens_estimate).toBeUndefined();
     // Deliberately NOT the sum of the entries: the total includes the wrappers
@@ -181,11 +203,23 @@ describe('Projection', () => {
     expect(ProjectionEntry.safeParse({ ...entry, outcome: 'over_cap' }).success).toBe(false);
     expect(ProjectionEntry.safeParse({ ...entry, origin: 'repo' }).success).toBe(false);
     expect(ProjectionEntry.safeParse({ path: 'a.md', outcome: 'injected' }).success).toBe(false);
+    // `repo_id` is required on every entry, not only on the envelope (F3).
+    expect(ProjectionEntry.safeParse({ ...entry, repo_id: undefined }).success).toBe(false);
   });
 
-  it('requires agent_id and both token figures — a projection is meaningless unattributed', () => {
-    const base = { agent_id: 'agent-1', budget_tokens: 8000, projected_tokens: 100, entries: [] };
+  it('requires agent_id, repo_id and both token figures — a projection is meaningless unattributed', () => {
+    const base = {
+      agent_id: 'agent-1',
+      repo_id: 'repo-1',
+      budget_tokens: 8000,
+      projected_tokens: 100,
+      entries: [],
+    };
     expect(Projection.safeParse({ ...base, agent_id: undefined }).success).toBe(false);
+    // F2 — a projection that does not name the repository it was computed for
+    // cannot be compared with a run, because the run's cross-repo skip depends
+    // on exactly that.
+    expect(Projection.safeParse({ ...base, repo_id: undefined }).success).toBe(false);
     expect(Projection.safeParse({ ...base, budget_tokens: undefined }).success).toBe(false);
     expect(Projection.safeParse({ ...base, projected_tokens: undefined }).success).toBe(false);
     expect(Projection.safeParse({ ...base, projected_tokens: -1 }).success).toBe(false);

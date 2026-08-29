@@ -84,6 +84,35 @@ function isAllowed(rel: string, allow: AllowList): boolean {
   return hasAllowedSegment(rel, segments) || hasAllowedPrefix(rel, prefixes);
 }
 
+/**
+ * THE allow-list predicate — "would the walk list this path?" — as one function
+ * every gate calls (fix-brief F1).
+ *
+ * It bundles the three rules that used to live only inside `walkDir`:
+ * the `.md`/`.mdx` extension filter, the `EXCLUDED_DIRS` skip, and the
+ * doc-directory allow-list itself. Keeping them in the walk alone made the
+ * listing the ONLY place they applied, while `attach()` and `readDoc()` — the
+ * two gates that actually feed the model — checked containment and nothing
+ * else. Any file inside the clone could therefore be attached and read,
+ * including `.git/config`, which holds the PAT `withGitHubToken` embeds in the
+ * clone URL (`repos/helpers.ts:29-40`).
+ *
+ * REQ-2 states the allow-list AS PART OF the security requirement, so it is
+ * enforced with the containment check rather than beside it: `safeDocPath`
+ * calls this, which means no caller can apply one half without the other.
+ *
+ * `EXCLUDED_DIRS` is re-checked here rather than relied on from the walk's
+ * directory pruning, because a path handed in from the database never went
+ * through that pruning — and `node_modules/pkg/docs/x.md` has an allow-listed
+ * `docs` segment.
+ */
+export function isDiscoverableDocPath(rel: string, allow: AllowList = {}): boolean {
+  if (!MD_SET.has(extname(rel).toLowerCase())) return false;
+  // `slice(0, -1)` — directory segments only; the last part is the filename.
+  if (rel.split('/').slice(0, -1).some((seg) => EXCLUDED_SET.has(seg))) return false;
+  return isAllowed(rel, allow);
+}
+
 // ---------------------------------------------------------------------------
 // The clone root, resolved once per request, classifying its own failure (F3)
 // ---------------------------------------------------------------------------
@@ -146,20 +175,31 @@ export function isSafeRelPath(p: string): boolean {
 }
 
 /**
- * The read gate: string checks AND a `realpath` containment check against an
- * already-resolved clone root. Returns the absolute path to read, or `null`
- * when the document must not be opened.
+ * The read gate: string checks, the ALLOW-LIST, and a `realpath` containment
+ * check against an already-resolved clone root. Returns the absolute path to
+ * read, or `null` when the document must not be opened.
  *
  * Returns `null` rather than throwing because every caller's contract is
  * "skip it and record the reason" (REQ-12) — an unreadable document must never
  * cost a run.
  *
+ * The allow-list check (F1) sits here rather than in each caller so that a path
+ * the walk would never list cannot be read by ANY route or by the run path,
+ * including one that was stored in `context_attachments` before the check
+ * existed. Containment alone is not the requirement: `.git/config` is perfectly
+ * contained and holds the GitHub PAT.
+ *
  * Note the ordering: `realpath` is called on the CANDIDATE, and the result is
  * compared to the root. Checking the string first and opening later would be
  * the TOCTOU this whole helper exists to close.
  */
-export async function safeDocPath(root: string, rel: string): Promise<string | null> {
+export async function safeDocPath(
+  root: string,
+  rel: string,
+  allow: AllowList = {},
+): Promise<string | null> {
   if (!isSafeRelPath(rel)) return null;
+  if (!isDiscoverableDocPath(rel, allow)) return null;
   const candidate = join(root, rel);
   let resolved: string;
   try {
@@ -186,14 +226,19 @@ export type DocRead =
 /**
  * Read one document through the containment gate.
  *
- * `unsafe_path` covers both refusals — a path that fails the string checks and
- * one that escapes the clone — deliberately: the caller records a reason in a
- * user-visible trace, and distinguishing "you wrote `..`" from "this resolved
- * outside the clone" tells a probing user which of their attempts got closer.
- * Missing files land here too, since `realpath` cannot resolve them.
+ * `unsafe_path` covers every refusal — a path that fails the string checks, one
+ * that is not allow-listed, and one that escapes the clone — deliberately: the
+ * caller records a reason in a user-visible trace, and distinguishing "you
+ * wrote `..`" from "this resolved outside the clone" tells a probing user which
+ * of their attempts got closer. Missing files land here too, since `realpath`
+ * cannot resolve them.
  */
-export async function readDoc(root: string, rel: string): Promise<DocRead> {
-  const abs = await safeDocPath(root, rel);
+export async function readDoc(
+  root: string,
+  rel: string,
+  allow: AllowList = {},
+): Promise<DocRead> {
+  const abs = await safeDocPath(root, rel, allow);
   if (!abs) return { ok: false, reason: 'unsafe_path' };
 
   let size: number;
@@ -270,7 +315,9 @@ export async function discoverDocs(
     // would be a number nobody may act on, bought with a 2 MB read.
     let tokens: number | undefined;
     if (!overCap) {
-      const read = await readDoc(root, c.rel);
+      // The same `allow` the walk used — otherwise a listing built with a
+      // narrowed allow-list would be re-checked against the default one.
+      const read = await readDoc(root, c.rel, allow);
       if (read.ok) tokens = tokenizer.count(read.content);
     }
     files.push({
@@ -314,11 +361,12 @@ async function walkDir(
       continue;
     }
     if (!entry.isFile()) continue;
-    if (!MD_SET.has(extname(name).toLowerCase())) continue;
 
     const full = join(dir, name);
     const rel = relative(root, full).split(sep).join('/');
-    if (!isAllowed(rel, allow)) continue;
+    // ONE predicate, shared with `safeDocPath` (F1), so "what the walk lists"
+    // and "what a read will open" cannot drift apart again.
+    if (!isDiscoverableDocPath(rel, allow)) continue;
 
     try {
       const st = await stat(full);

@@ -701,7 +701,7 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
 
       // AC-27's first half: the page marks the drop BEFORE any run.
       const projection = Projection.parse(
-        (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection` })).json(),
+        (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
       );
       const markedDropped = projection.entries
         .filter((e) => e.outcome === 'dropped_budget')
@@ -738,7 +738,7 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
       }
 
       const projection = Projection.parse(
-        (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection` })).json(),
+        (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
       );
       expect(projection.projected_tokens).toBeGreaterThan(0);
 
@@ -749,6 +749,89 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
       // prompt-assembly stat counts `assembly.specs` WITHOUT the heading and
       // therefore can never equal a projection that includes it.
       const line = trace.log.find((l) => l.msg.startsWith('project context:') && l.msg.includes('tokens'));
+      expect(line).toBeDefined();
+      const recorded = Number(/~(\d+) tokens/.exec(line!.msg)![1]);
+      expect(recorded).toBe(projection.projected_tokens);
+
+      await app.close();
+    });
+
+    /**
+     * Fix-brief F2 — the projection and the run must agree for a MULTI-REPO
+     * agent, which is the one case the old projection could not get right: it
+     * passed each attachment its own repo id as the repo under review, so the
+     * cross-repo guard compared `x !== x` and never fired. The page promised to
+     * inject a document the run skips.
+     *
+     * This asserts the two agree on BOTH halves AC-26 names — the same per
+     * document outcome, and the same `sectionTokens`.
+     */
+    it('F2 — a multi-repo agent`s projection and run produce the same outcomes and the same sectionTokens', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+
+      const otherClone = join(base, 'f2-other-clone');
+      await mkdir(join(otherClone, 'docs'), { recursive: true });
+      await writeFile(
+        join(otherClone, 'docs', 'other.md'),
+        '# Other repo\n\nBELONGS TO A DIFFERENT PROJECT\n',
+      );
+
+      const other = await setupRepoAndPr(pg.handle.db, workspaceId, otherClone);
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'MultiRepoAgreementAgent');
+
+      // One document from the repo under review, one from another repo. Both
+      // exist on disk and are readable, so the only thing that can distinguish
+      // them is which repository they were attached against.
+      await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      await attach(app, {
+        path: 'docs/other.md',
+        repo_id: other.repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+
+      const projection = Projection.parse(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+          })
+        ).json(),
+      );
+
+      // The page's half: the foreign document is marked `skipped`, which is the
+      // "wrong repo" cause `ProjectionOutcome.skipped` documents and which the
+      // projection previously could not emit at all.
+      expect(projection.entries.map((e) => [e.path, e.outcome])).toEqual([
+        ['docs/a.md', 'injected'],
+        ['docs/other.md', 'skipped'],
+      ]);
+
+      const trace = await runAndTrace(app, pr.id, agent.id, 1);
+
+      // The run's half: same two documents, same two outcomes.
+      expect(trace.specs_read).toHaveLength(2);
+      expect(trace.specs_read[0]).toBe('docs/a.md');
+      expect(trace.specs_read[1]).toContain('docs/other.md');
+      expect(trace.specs_read[1]).toContain('different repository');
+
+      // Neither the foreign document nor any same-named local file reached the
+      // model — the delimiter assertion goes against `user`, because
+      // `JSON.stringify` of the calls escapes the quotes.
+      expect(trace.prompt_assembly.user).toContain('cost-plus-14pct');
+      expect(trace.prompt_assembly.user).not.toContain('BELONGS TO A DIFFERENT PROJECT');
+
+      // AC-26's number, for the multi-repo shape: the projected total is the
+      // section size the run recorded.
+      const line = trace.log.find(
+        (l) => l.msg.startsWith('project context:') && l.msg.includes('tokens'),
+      );
       expect(line).toBeDefined();
       const recorded = Number(/~(\d+) tokens/.exec(line!.msg)![1]);
       expect(recorded).toBe(projection.projected_tokens);

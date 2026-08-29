@@ -187,6 +187,14 @@ export type ProjectionOrigin = "agent" | "skill";
 /** One document the agent would consider, in injection order. */
 export interface ProjectionEntry {
   path: string;
+  /**
+   * The repository the path belongs to — NOT necessarily the repo the
+   * projection was computed for. Documents attached against another repository
+   * are listed with `outcome: "skipped"` rather than hidden, and `path` alone
+   * is therefore not a unique key for this list: two repositories can each
+   * contain `docs/prd.md`. Use `(repo_id, path)`.
+   */
+  repo_id: string;
   /** Direct attachment, or inherited from an enabled linked skill. */
   origin: ProjectionOrigin;
   /** The skill it was inherited through; absent for a direct attachment. */
@@ -197,12 +205,18 @@ export interface ProjectionEntry {
 }
 
 /**
- * The projection for ONE agent (REQ-10) — never a page-wide figure (D-9): the
- * inherited set and order differ per agent, so the projection and its drop
- * marking are computed per agent.
+ * The projection for ONE agent AGAINST ONE REPOSITORY (REQ-10) — never a
+ * page-wide figure (D-9): the inherited set and order differ per agent, so the
+ * projection and its drop marking are computed per agent.
+ *
+ * Per repository too: a run happens against one repo and skips any document
+ * attached against a different one, so a projection that does not name a repo
+ * cannot agree with a run for a multi-repo agent.
  */
 export interface Projection {
   agent_id: string;
+  /** The repository the projection was computed against. */
+  repo_id: string;
   /** The section budget in force, currently 8 000. */
   budget_tokens: number;
   /**
@@ -215,15 +229,29 @@ export interface Projection {
 }
 
 /**
- * GET /agents/:id/context/projection — the projected token cost a run would
- * send for this agent right now, including inherited enabled-skill documents.
+ * GET /agents/:id/context/projection?repo_id= — the projected token cost a run
+ * against THIS repository would send for this agent right now, including
+ * inherited enabled-skill documents.
+ *
  * Disabled when no agent is selected (D-11) — the caller decides whether "no
- * agent in view" or "loading" or "unavailable" is shown.
+ * agent in view" or "loading" or "unavailable" is shown — and equally when no
+ * repo is selected: `repo_id` is required server-side, so calling without one
+ * would be a guaranteed 422 rather than a useful answer.
+ *
+ * `repoId` is part of the query key, because the same agent legitimately
+ * projects differently per repository. The mutations above invalidate with the
+ * `["context-projection", agentId]` PREFIX, which still matches.
  */
-export function useAgentContextProjection(agentId: string | null | undefined) {
+export function useAgentContextProjection(
+  agentId: string | null | undefined,
+  repoId: string | null | undefined,
+) {
   return useQuery({
-    queryKey: ["context-projection", agentId],
-    queryFn: () => api.get<Projection>(`/agents/${agentId}/context/projection`),
-    enabled: !!agentId,
+    queryKey: ["context-projection", agentId, repoId],
+    queryFn: () =>
+      api.get<Projection>(
+        `/agents/${agentId}/context/projection?repo_id=${encodeURIComponent(repoId!)}`,
+      ),
+    enabled: !!agentId && !!repoId,
   });
 }

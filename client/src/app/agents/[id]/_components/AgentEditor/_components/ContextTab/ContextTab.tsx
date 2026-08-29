@@ -6,6 +6,7 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import type { Agent } from "@devdigest/shared";
+import { useActiveRepo } from "@/lib/repo-context";
 import { useAgentContextProjection } from "@/lib/hooks/project-context";
 import { useAgentSkills, useSkills } from "@/lib/hooks/conventions";
 import { ProjectionSummary } from "@/components/ProjectionSummary";
@@ -13,7 +14,18 @@ import { s } from "./styles";
 
 export function ContextTab({ agent }: { agent: Agent }) {
   const router = useRouter();
-  const projection = useAgentContextProjection(agent.id);
+  /**
+   * A projection is per agent AND per repository (fix-brief F2): the same agent
+   * legitimately projects differently against different repos, because
+   * documents attached elsewhere are skipped. The shell's active repo is the
+   * one the rest of the app is showing, and `/context` — where these
+   * attachments are made — is scoped to exactly that repo, so the two views
+   * agree by construction. With no repo selected the hook stays disabled and
+   * `ProjectionSummary` renders its "unavailable" state rather than calling an
+   * endpoint that would 422.
+   */
+  const { activeRepo } = useActiveRepo();
+  const projection = useAgentContextProjection(agent.id, activeRepo?.id ?? null);
   const allSkills = useSkills();
   const agentSkills = useAgentSkills(agent.id);
 

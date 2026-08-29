@@ -1,6 +1,6 @@
 import { wrapUntrusted } from '@devdigest/reviewer-core';
 import type { Tokenizer } from '../../adapters/tokenizer/index.js';
-import type { ProjectionEntry, ProjectionOrigin } from './contract.js';
+import { attachmentKey, type ProjectionEntry, type ProjectionOrigin } from './contract.js';
 import {
   PROJECT_CONTEXT_BLOCK_SEPARATOR,
   PROJECT_CONTEXT_HEADING,
@@ -46,6 +46,13 @@ import {
 /** One resolved document handed to the assembler, in injection order. */
 export interface ResolvedDoc {
   path: string;
+  /**
+   * The repository the path is relative to. Required, and NOT the repo under
+   * review: an agent can carry documents from several repositories, and the
+   * ones from elsewhere are still listed (as `skipped`). With `path` it forms
+   * the document's identity — see `attachmentKey` (fix-brief F3).
+   */
+  repoId: string;
   /** Direct attachment, or inherited from an enabled linked skill. */
   origin: ProjectionOrigin;
   /** The skill it came through; null for a direct attachment. */
@@ -62,6 +69,8 @@ export interface ResolvedDoc {
 /** A document that will not be injected, and why. Never carries text. */
 export interface AssembleSkip {
   path: string;
+  /** Part of the document's identity — see `ResolvedDoc.repoId` (F3). */
+  repoId: string;
   reason: string;
 }
 
@@ -123,6 +132,7 @@ export function assembleProjectContext(
   for (const doc of docs) {
     const base = {
       path: doc.path,
+      repo_id: doc.repoId,
       origin: doc.origin,
       ...(doc.viaSkillId != null ? { via_skill_id: doc.viaSkillId } : {}),
     };
@@ -132,7 +142,7 @@ export function assembleProjectContext(
     // would put an empty `<untrusted>` block in the prompt.
     if (doc.content == null || doc.content.trim().length === 0) {
       const reason = doc.skipReason ?? 'empty document';
-      skipped.push({ path: doc.path, reason });
+      skipped.push({ path: doc.path, repoId: doc.repoId, reason });
       entries.push({ ...base, outcome: 'skipped' });
       continue;
     }
@@ -150,6 +160,7 @@ export function assembleProjectContext(
     if (used + cost > budget) {
       dropped.push({
         path: doc.path,
+        repoId: doc.repoId,
         reason: `dropped for budget (${budget} tokens)`,
       });
       entries.push({ ...base, tokens_estimate: cost, outcome: 'dropped_budget' });
@@ -188,12 +199,21 @@ export function assembleProjectContext(
  * `AssembleResult` and because §7's safety rule — "a reason names a path and a
  * cause, never content" — is asserted against it mechanically in
  * `prompt-log.test.ts`, beside the repo's other planted-secret guards.
+ *
+ * The reason map is keyed by `(repoId, path)`, not by `path` (fix-brief F3):
+ * an agent holding `docs/prd.md` in two repositories produces two entries with
+ * the same path and DIFFERENT causes — typically one dropped for budget and one
+ * skipped as cross-repo — and a path-keyed map silently reported whichever was
+ * written last for both of them.
  */
 export function specsReadFor(result: AssembleResult): string[] {
   const reasons = new Map<string, string>();
-  for (const s of [...result.skipped, ...result.dropped]) reasons.set(s.path, s.reason);
+  for (const s of [...result.skipped, ...result.dropped]) {
+    reasons.set(attachmentKey(s.repoId, s.path), s.reason);
+  }
   return result.entries.map((e) => {
-    const reason = e.outcome === 'injected' ? undefined : reasons.get(e.path);
+    const reason =
+      e.outcome === 'injected' ? undefined : reasons.get(attachmentKey(e.repo_id, e.path));
     return reason ? `${e.path} — ${reason}` : e.path;
   });
 }

@@ -12,11 +12,10 @@ import { loadDiff } from './diff-loader.js';
 // Leaf module (contract types only) — importing it does not create a cycle with
 // intent/service.ts, which depends on this module's diff-loader.
 import { renderIntentBlock } from '../intent/block.js';
-// Same reasoning: `project-context` owns the clone read and this module never
-// opens a document itself (spec §9). Importing the service rather than reaching
-// through the container because no container slot exists for it — see the note
-// on the resolution block below.
-import { ProjectContextService, type RunContext } from '../project-context/service.js';
+// Contract type only. The SERVICE is reached through `container.projectContext`
+// (fix-brief F6) — the leaf-module justification above does not carry over to
+// `project-context/service.ts`, which imports the container and is not a leaf.
+import type { RunContext } from '../project-context/service.js';
 
 /** Thrown by a run when the user cancels it mid-flight (between map files). */
 export class RunCancelledError extends Error {
@@ -286,7 +285,7 @@ export class ReviewRunExecutor {
        */
       let projectContext: RunContext | null = null;
       try {
-        projectContext = await new ProjectContextService(this.container).resolveFor(
+        projectContext = await this.container.projectContext.resolveFor(
           workspaceId,
           agent.id,
           { id: repo.id, clonePath: repo.clonePath },

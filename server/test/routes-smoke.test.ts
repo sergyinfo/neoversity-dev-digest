@@ -141,3 +141,48 @@ describe('routes (no DB)', () => {
     await app.close();
   });
 });
+
+/**
+ * Fix-brief F6 — Project Context is reached through the container, like every
+ * other sibling capability, and the slot is injectable.
+ *
+ * The cost of the old direct `new ProjectContextService(this.container)` in
+ * `run-executor` was exactly this seam: a reviews-run test could not stub what
+ * an agent's project context resolves to and had to stand up a real clone on
+ * disk. Asserting the getter and the override here — with no DB — is what makes
+ * that claim mechanical rather than a comment.
+ */
+describe('container.projectContext (F6)', () => {
+  it('exposes a cached getter of the `blast` shape', async () => {
+    const app = await buildApp({ config });
+    const first = app.container.projectContext;
+    expect(first).toBeDefined();
+    expect(typeof first.resolveFor).toBe('function');
+    // Cached, like `blast` and `repoIntel`: the constructor takes the container
+    // and nothing else, so there is no per-request state to pin.
+    expect(app.container.projectContext).toBe(first);
+    await app.close();
+  });
+
+  it('honours a ContainerOverrides stub, so a run can be tested without a clone', async () => {
+    const stub = {
+      resolveFor: async () => ({
+        entries: [],
+        texts: ['stubbed'],
+        sectionText: '',
+        sectionTokens: 42,
+        skipped: [],
+        dropped: [],
+        specsRead: [],
+      }),
+    };
+    const app = await buildApp({ config, overrides: { projectContext: stub } });
+    expect(app.container.projectContext).toBe(stub);
+    const resolved = await app.container.projectContext.resolveFor('ws', 'agent', {
+      id: 'repo',
+      clonePath: null,
+    });
+    expect(resolved.sectionTokens).toBe(42);
+    await app.close();
+  });
+});

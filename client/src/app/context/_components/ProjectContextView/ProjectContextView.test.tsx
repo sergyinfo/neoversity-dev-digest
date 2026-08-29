@@ -247,3 +247,153 @@ describe("ProjectContextView — no repository selected (§6)", () => {
     expect(screen.getByText("No repository selected")).toBeInTheDocument();
   });
 });
+
+/**
+ * Fix-brief F4 — an attachment belongs to a (repo, path) PAIR.
+ *
+ * `listForTarget` returns every attachment on a target across ALL repositories
+ * and the rows carry `repo_id`, which the tabs discarded: `attachedPaths` was
+ * built from `a.path` alone. With `docs/prd.md` attached from repo-2 and repo-1
+ * active, the toggle rendered ON for a document that is not attached here — so
+ * repo-1's copy could never be attached — and switching it off ran
+ * `find(a => a.path === doc.path)`, which returns repo-2's row, DELETEing an
+ * attachment belonging to a repository the user is not looking at.
+ *
+ * This is the first client test to render `AgentsTab` with a NON-EMPTY agent
+ * list, which is why the defect was invisible: every existing case falls into
+ * the "no agents" empty state before reaching the document rows.
+ */
+describe("ProjectContextView — F4: attachments are matched on (repo_id, path)", () => {
+  const AGENT = {
+    id: "agent-1",
+    name: "Security Reviewer",
+    provider: "openai",
+    model: "gpt-4.1",
+    system_prompt: "p",
+    enabled: true,
+    version: 1,
+  } as unknown as Agent;
+
+  const DOCS = docList({
+    files: [
+      {
+        path: "docs/prd.md",
+        tokens_estimate: 500,
+        size: 900,
+        content: null,
+        updated_at: null,
+        over_cap: false,
+      },
+    ],
+  });
+
+  /** The same path, attached against a DIFFERENT repository. */
+  const FOREIGN_ROW = {
+    id: "att-foreign",
+    path: "docs/prd.md",
+    repo_id: "repo-2",
+    target_kind: "agent" as const,
+    target_id: "agent-1",
+    order: 0,
+  };
+
+  beforeEach(() => {
+    useAgents.mockReturnValue({ data: [AGENT], isLoading: false });
+    useContextDocs.mockReturnValue({
+      data: DOCS,
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+  });
+
+  it("renders the toggle OFF for a document attached only from another repo", () => {
+    useTargetAttachments.mockImplementation((kind: string) =>
+      kind === "agent" ? { data: [FOREIGN_ROW] } : { data: [] },
+    );
+    renderPage();
+
+    // `Toggle` renders role="switch" and has no label text (client/INSIGHTS.md).
+    const toggle = screen.getByRole("switch");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("renders the toggle ON for a document attached from the ACTIVE repo", () => {
+    useTargetAttachments.mockImplementation((kind: string) =>
+      kind === "agent"
+        ? { data: [{ ...FOREIGN_ROW, id: "att-local", repo_id: "repo-1" }] }
+        : { data: [] },
+    );
+    renderPage();
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("attaches this repo`s copy rather than being blocked by the other repo`s row", () => {
+    const mutate = vi.fn();
+    useTargetAttachments.mockImplementation((kind: string) =>
+      kind === "agent" ? { data: [FOREIGN_ROW] } : { data: [] },
+    );
+    useAttachContextDoc.mockReturnValue({ ...NO_MUTATION, mutate });
+    renderPage();
+
+    fireEvent.click(screen.getByRole("switch"));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0]![0]).toMatchObject({
+      path: "docs/prd.md",
+      repo_id: "repo-1",
+      target_kind: "agent",
+      target_id: "agent-1",
+    });
+  });
+
+  it("never detaches another repository`s attachment", () => {
+    const mutate = vi.fn();
+    useTargetAttachments.mockImplementation((kind: string) =>
+      kind === "agent"
+        ? { data: [FOREIGN_ROW, { ...FOREIGN_ROW, id: "att-local", repo_id: "repo-1" }] }
+        : { data: [] },
+    );
+    useDetachContextDoc.mockReturnValue({ ...NO_MUTATION, mutate });
+    renderPage();
+
+    // Attached here (repo-1's row exists), so clicking detaches...
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("switch"));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    // ...repo-1's row. `find` on path alone returns `att-foreign`, which is
+    // first in the list — the deletion of a row the user cannot even see.
+    expect(mutate.mock.calls[0]![0]).toMatchObject({ id: "att-local", repo_id: "repo-1" });
+  });
+
+  it("scopes the Skills tab the same way", () => {
+    useSkills.mockReturnValue({
+      data: [
+        {
+          id: "skill-1",
+          name: "Security Skill",
+          description: "",
+          type: "security",
+          source: "manual",
+          body: "",
+          enabled: true,
+          version: 1,
+        },
+      ],
+      isLoading: false,
+    });
+    useTargetAttachments.mockImplementation((kind: string) =>
+      kind === "skill"
+        ? { data: [{ ...FOREIGN_ROW, target_kind: "skill", target_id: "skill-1" }] }
+        : { data: [] },
+    );
+    renderPage();
+    fireEvent.click(screen.getByText("Skills"));
+
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    // The contribution figure reads the same set, so it must not count the
+    // other repository's document either.
+    expect(screen.queryByText(/500 tokens across/)).not.toBeInTheDocument();
+  });
+});

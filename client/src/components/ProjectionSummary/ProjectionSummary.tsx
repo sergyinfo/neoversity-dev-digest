@@ -99,7 +99,11 @@ export function ProjectionSummary({
           const origin = ORIGIN_META[entry.origin];
           const outcome = OUTCOME_META[entry.outcome];
           return (
-            <li key={entry.path} style={s.entryRow}>
+            /* `(repo_id, path)`, not `path` (fix-brief F3): after the
+               server-side dedupe that pair is unique across the list, while
+               `path` is not — an agent can hold `docs/prd.md` in two
+               repositories, and both are listed. */
+            <li key={`${entry.repo_id}\u0000${entry.path}`} style={s.entryRow}>
               <span className="mono" style={s.path} title={entry.path}>
                 {entry.path}
               </span>

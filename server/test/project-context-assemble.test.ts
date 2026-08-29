@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { assembleProjectContext, type ResolvedDoc } from '../src/modules/project-context/assemble.js';
+import {
+  assembleProjectContext,
+  specsReadFor,
+  type ResolvedDoc,
+} from '../src/modules/project-context/assemble.js';
 import {
   PROJECT_CONTEXT_HEADING,
   PROJECT_CONTEXT_TOKEN_BUDGET,
@@ -21,6 +25,10 @@ const tokenizer = { count: (text: string) => Math.ceil(text.length / 4) };
 
 const doc = (path: string, content: string | null, over: Partial<ResolvedDoc> = {}): ResolvedDoc => ({
   path,
+  // Every document belongs to a repository, and `(repoId, path)` — not `path`
+  // — is its identity (fix-brief F3). The helper defaults it so the cases that
+  // do not care about repos read unchanged; the F3 case below overrides it.
+  repoId: 'repo-1',
   origin: 'agent',
   content,
   ...over,
@@ -53,7 +61,7 @@ describe('assembleProjectContext — the empty-array invariant (AC-19, R3)', () 
   it('a whitespace-only document is filtered INSIDE the assembler, not by the caller', () => {
     const r = assembleProjectContext([doc('blank.md', '   \n\n\t ')], tokenizer);
     expect(r.texts).toEqual([]);
-    expect(r.skipped).toEqual([{ path: 'blank.md', reason: 'empty document' }]);
+    expect(r.skipped).toEqual([{ path: 'blank.md', repoId: 'repo-1', reason: 'empty document' }]);
   });
 
   it('the engine renders no section for what this returns on an empty run', () => {
@@ -149,6 +157,48 @@ describe('assembleProjectContext — budget (AC-22, REQ-13)', () => {
     const r = assembleProjectContext([doc('a.md', 'x'.repeat(40_000))], tokenizer);
     expect(PROJECT_CONTEXT_TOKEN_BUDGET).toBe(8_000);
     expect(r.dropped.map((d) => d.path)).toEqual(['a.md']);
+  });
+});
+
+/**
+ * Fix-brief F3, second knock-on. `specsReadFor` keyed its reason map by `path`,
+ * so two entries sharing a path — which a multi-repo agent produces routinely,
+ * one skipped as cross-repo and one dropped for budget — had one cause silently
+ * overwrite the other in `RunTrace.specs_read`. The trace then told the user the
+ * wrong reason for a document, which is worse than telling them none.
+ */
+describe('specsReadFor — reasons are keyed by (repoId, path), not path (F3)', () => {
+  it('two documents with the SAME path in different repos keep their own reasons', () => {
+    const r = assembleProjectContext(
+      [
+        doc('docs/prd.md', null, { repoId: 'repo-1', skipReason: 'attached to a different repository' }),
+        doc('docs/prd.md', 'B'.repeat(4000), { repoId: 'repo-2' }),
+      ],
+      tokenizer,
+      { budgetTokens: 200 },
+    );
+
+    const specsRead = specsReadFor(r);
+    expect(specsRead).toHaveLength(2);
+    expect(specsRead[0]).toBe('docs/prd.md — attached to a different repository');
+    expect(specsRead[1]).toContain('dropped for budget');
+    // The two causes are genuinely different — a path-keyed map returns the
+    // same string for both, which is exactly what this asserts against.
+    expect(specsRead[0]).not.toBe(specsRead[1]);
+  });
+
+  it('an injected document still carries no reason, even when its path is shared', () => {
+    const r = assembleProjectContext(
+      [
+        doc('docs/prd.md', null, { repoId: 'repo-1', skipReason: 'attached to a different repository' }),
+        doc('docs/prd.md', 'fits', { repoId: 'repo-2' }),
+      ],
+      tokenizer,
+    );
+    expect(specsReadFor(r)).toEqual([
+      'docs/prd.md — attached to a different repository',
+      'docs/prd.md',
+    ]);
   });
 });
 

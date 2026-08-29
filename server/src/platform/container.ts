@@ -33,6 +33,10 @@ import { type Tokenizer, TiktokenTokenizer } from '../adapters/tokenizer/index.j
 import { HttpWebFetchClient } from '../adapters/http/web-fetch.js';
 import { IntentService, type Logger as IntentLogger } from '../modules/intent/service.js';
 import { BlastService } from '../modules/blast/service.js';
+import {
+  ProjectContextService,
+  type ProjectContext,
+} from '../modules/project-context/service.js';
 
 /**
  * DI container. One per app instance. Holds config, db, the JobRunner,
@@ -57,6 +61,12 @@ export interface ContainerOverrides {
   tokenizer?: Tokenizer;
   /** Guarded outbound HTTP (Intent Layer external references). */
   webFetch?: WebFetchClient;
+  /**
+   * Project Context (L05) — the clone-reading half of a review run. Injectable
+   * so a reviews-run test can stub what an agent's project context resolves to
+   * instead of standing up a real clone on disk.
+   */
+  projectContext?: ProjectContext;
 }
 
 export class Container {
@@ -83,6 +93,7 @@ export class Container {
   private _tokenizer?: Tokenizer;
   private _webFetch?: WebFetchClient;
   private _blast?: BlastService;
+  private _projectContext?: ProjectContext;
   private _priceBook?: PriceBook;
 
   constructor(config: AppConfig, db: Db, private overrides: ContainerOverrides = {}) {
@@ -186,6 +197,24 @@ export class Container {
   get blast(): BlastService {
     this._blast ??= new BlastService(this);
     return this._blast;
+  }
+
+  /**
+   * Project Context service (L05), reached the same way as `blast` and
+   * `repoIntel` so `run-executor` does not import another module's service
+   * class (fix-brief F6).
+   *
+   * A cached getter rather than the `intent(logger)` method shape, for the
+   * reason given on `blast` above: `ProjectContextService`'s constructor takes
+   * the container and nothing else, so there is no per-request state to pin.
+   * Unlike `blast` it carries a `ContainerOverrides` entry, because it is on
+   * the review-run path and reads the filesystem — a reviews test that wants to
+   * exercise anything else has to be able to stub it.
+   */
+  get projectContext(): ProjectContext {
+    if (this.overrides.projectContext) return this.overrides.projectContext;
+    this._projectContext ??= new ProjectContextService(this);
+    return this._projectContext;
   }
 
   /**

@@ -82,11 +82,47 @@ export const MAX_DOC_BYTES = 64 * 1024;
 export const MAX_LISTED_DOCS = 500;
 
 /**
- * 20 documents per agent and per skill. Bounds the worst case BEFORE the token
- * budget applies: 20 × 64 KB is the ceiling on run-time local reads, which is
- * what keeps §7's "under 500 ms added to run start" reachable.
+ * 20 documents per agent and per skill.
+ *
+ * CORRECTION (fix-brief F5): this constant used to claim "20 × 64 KB is the
+ * ceiling on run-time local reads". IT IS NOT, and never was. `resolveForAgent`
+ * returns the agent's own attachments PLUS those of every enabled linked skill,
+ * and `linkSkill` (`agents/repository.ts:208-218`) is an unbounded upsert — so
+ * this constant bounds one TARGET's attachments at 20 and the per-resolution
+ * total at `20 × (1 + N_skills)`, which grows without limit. 100 linked skills
+ * meant ~2 020 documents `stat`-ed, read and tokenized on every run AND on
+ * every uncached `GET /agents/:id/context/projection`.
+ *
+ * The real ceiling on run-time local reads is `MAX_DOCS_PER_RESOLUTION` below.
  */
 export const MAX_ATTACHMENTS_PER_TARGET = 20;
+
+/**
+ * The ceiling on how many documents ONE resolution actually opens — 40.
+ *
+ * This is a judgement call, not a value read off the spec: §7 fixes the
+ * per-target cap and says nothing about the aggregate across linked skills, so
+ * some number had to be chosen. `MAX_ATTACHMENTS_PER_TARGET × 2` — the agent's
+ * own 20, plus at most 20 more inherited across ALL enabled linked skills
+ * combined — because:
+ *
+ *  - it does not grow with the skill count, which is the property F5 asks for;
+ *  - it is far above what can ever be INJECTED anyway. The section budget is
+ *    8 000 tokens (~32 KB of prose), so a handful of documents fills it and the
+ *    41st was never going to be sent — the cost of reading it was pure waste;
+ *  - it leaves every realistic configuration untouched: an agent inheriting 20
+ *    or fewer documents in total behaves exactly as before;
+ *  - it bounds the worst case at 40 × 64 KB ≈ 2.6 MB and 40 tokenizer passes,
+ *    which is what makes §7's "under 500 ms added to run start" and NFR-1's
+ *    "under 500 ms" for the projection endpoint attainable again.
+ *
+ * Documents past the limit are SKIPPED WITH A REASON, not hidden — they appear
+ * in the projection and in `RunTrace.specs_read` like any other skip. The cut
+ * falls at the tail of injection order, which is the agent's own attachments
+ * first and then inherited ones in skill-link order, so the documents dropped
+ * are always the ones furthest from the user's explicit per-agent choice.
+ */
+export const MAX_DOCS_PER_RESOLUTION = MAX_ATTACHMENTS_PER_TARGET * 2;
 
 /**
  * 8 000 estimated tokens for the `## Project context` section, **held

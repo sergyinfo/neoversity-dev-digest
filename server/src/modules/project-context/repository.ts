@@ -1,7 +1,7 @@
 import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
-import type { AttachmentRow, AttachmentTargetKind } from './contract.js';
+import { attachmentKey, type AttachmentRow, type AttachmentTargetKind } from './contract.js';
 
 /**
  * L05 (S6) — Project Context data access. The ONLY layer touching the DB for
@@ -191,6 +191,24 @@ export class ProjectContextRepository {
    * `reviews/repository/skill.repo.ts:17-26`, so no caller can forget it. REQ-6
    * is a security-shaped rule — a skill toggled off in the UI must not reach the
    * model — and a filter a caller can omit is not that rule.
+   *
+   * ## Deduped by `(repoId, path)` — fix-brief F3
+   *
+   * The two partial unique indexes on `context_attachments` are PER TARGET KIND
+   * (`db/schema/context.ts:183-219`), so nothing in the database prevents the
+   * same document being attached directly to the agent AND to a skill it links.
+   * Concatenating the two lists rendered it twice — as `spec-0` and `spec-1`
+   * with byte-identical bodies — and charged the budget twice, which can push a
+   * DIFFERENT document out. `usageCounts` already dedupes this exact
+   * configuration for display, so the page said 1 while the run sent 2.
+   *
+   * THE DIRECT ATTACHMENT WINS. It is the user's explicit choice for this
+   * agent, it is first in injection order already, and `origin: 'agent'` is
+   * what `usageCounts`' distinct-agent count has always implied. Reporting it
+   * as inherited would tell the user a skill is responsible for a document they
+   * attached themselves — and detaching the skill would then not remove it.
+   * Among two inherited copies the earlier skill link wins, for the same
+   * reason: it is the one the user's own ordering puts first.
    */
   async resolveForAgent(workspaceId: string, agentId: string): Promise<ResolvedAttachment[]> {
     const direct = await this.db
@@ -231,7 +249,7 @@ export class ProjectContextRepository {
         asc(t.contextAttachments.path),
       );
 
-    return [
+    const all: ResolvedAttachment[] = [
       ...direct.map((r) => ({ ...r, origin: 'agent' as const, viaSkillId: null })),
       ...inherited.map((r) => ({
         id: r.id,
@@ -241,6 +259,16 @@ export class ProjectContextRepository {
         viaSkillId: r.skillId,
       })),
     ];
+
+    // First occurrence wins — the concatenation above is already in injection
+    // order, so "first" is "direct, then the earliest skill link".
+    const seen = new Set<string>();
+    return all.filter((a) => {
+      const key = attachmentKey(a.repoId, a.path);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   /**
