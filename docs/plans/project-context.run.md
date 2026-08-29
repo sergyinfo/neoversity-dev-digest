@@ -12,11 +12,11 @@ Ceiling: **12** — the plan's counted envelope of 11, plus `doc-writer` added a
 | 0 | Intake & baseline | **done** | Tree clean at `a8273db`; baseline captured before anything changed, all green |
 | 1 | Implementation (T0–T6) | **done** | all 7 tracks landed, `55a1639`…`aa7bf6c` |
 | 2 | Review ×3 | **done** | boundary: 1 major · correctness: 3 major, 3 minor · security: **1 BLOCKER**, 1 major, 5 minor |
-| 3 | Fix loop (≤2 rounds) | pending | — |
-| 4 | Verification | pending | — |
+| 3 | Fix loop (round 1 of ≤2) | **done** | `148151c` — 1 blocker + 5 majors, all fixed, none contested, each proven red before the fix |
+| 4 | Verification | **done** | **19/19 steps verified, 0 not verified.** 30/31 ACs verified; AC-24's e2e half unreached |
 | 5 | Land | pending | — |
 
-**Agent count: 10 / 15** — ceiling raised from 12 at the Stage 1→2 boundary so the fix rounds are funded.
+**Agent count: 13 / 15** — ceiling raised from 12 at the Stage 1→2 boundary so the fix rounds are funded.
 
 ### Tracks
 
@@ -52,16 +52,16 @@ what makes a later failure attributable.
 
 | # | Source | Severity | Finding | Round | Outcome |
 |---|---|---|---|---|---|
-| A1 | architecture-reviewer B3 | **major** | `run-executor.ts:19,289` imports and constructs `ProjectContextService` directly instead of reaching it through the container, the way `repoIntel`, `intent` and `blast` all are. Costs the `ContainerOverrides` injection seam every sibling capability has, makes `reviews` depend on a concrete class in another module, and its justifying comment cites the wrong precedent — the `intent/block.js` import above it is justified as a **leaf** (contract types only), while `project-context/service.ts` imports the container and is not one | 1 | open |
-| C1 | code-review | **major** | The projection can never apply the cross-repo skip. `service.ts:250` passes `att.repoId` as `reviewRepoId`, so `readAttachment`'s guard at `:286` is `x !== x` — permanently false. A multi-repo agent's projection injects documents the run skips, so AC-26's "agree exactly" fails. Root cause is structural: the projection endpoint takes no repo | 1 | open |
-| C2 | code-review | **major** | No dedupe in `resolveForAgent` (`repository.ts:234-243`). The partial unique indexes are per target kind, so a document attached directly **and** via an enabled skill arrives twice, is rendered twice into the prompt, and pays the budget twice — possibly pushing a different document out. `usageCounts` dedupes this exact case for display, so the page says 1 while the run sends 2. Knock-ons: a React duplicate `key`, and `specsReadFor`'s path-keyed reason map overwriting one cause with another | 1 | open |
-| C3 | code-review | **major** | `attachedPaths` ignores `repo_id` (`AgentsTab.tsx:35-38,63`, `SkillsTab.tsx:26-29,71`); the server lists attachments by workspace and target only. Two repos with the same path: the toggle renders on for a document that is not attached here, and detaching removes **the other repository's** attachment. One predicate fixes it | 1 | open |
-| C4 | code-review | minor | `usageCounts` splits its composite key on the **first** space (`repository.ts:282-287`), and paths may contain spaces. `docs/my notes.md` parses as `docs/my`, so a document in use renders "—" and a phantom bucket appears | 1 | open |
-| C5 | code-review | minor | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's `assembly.specs` does not. The demo artefact shows the exact heading-vs-`assembly.specs` conflation BQ-1 exists to prevent | 1 | open |
-| C6 | code-review | minor | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** — the `any` flag is dead code | 1 | open |
-| **S1** | **security-review** | **BLOCKER** | **The read gate enforces containment but not the allow-list.** The `.md` filter, the doc-directory allow-list and `EXCLUDED_DIRS` live **only inside `walkDir`**; neither `attach()` (`service.ts:113-177`) nor `readDoc()` (`discovery.ts:195-220`) applies any of them. Proved by executing the real module: `readDoc('.git/config')` returns `url = https://x-access-token:ghp_…@github.com/…`. That PAT is a **single global secret**, written verbatim into `.git/config` by `git clone` and never rewritten. Attach it, and on the next run it goes to the LLM provider **and** is persisted into `prompt_assembly`, which the trace drawer renders in full. `.env` and any source file read the same way | 1 | open |
-| S2 | security-review | **major** | The per-target cap does not bound per-run reads. `resolveForAgent` returns the agent's 20 **plus 20 per enabled linked skill**, and `linkSkill` is an unbounded upsert — so the real ceiling is `20 × (1 + N_skills)`, every one `stat`-ed, read and **tokenized before the budget drops anything**. 100 skills ≈ 2 020 reads, ~129 MB. Fires on the run **and** on the uncached projection route | 1 | open |
-| C7 | code-review | test quality | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string — as its "secret"; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; and `reviews.it.test.ts:750` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion | 1 | open |
+| A1 | architecture-reviewer B3 | **major** | `run-executor.ts:19,289` imports and constructs `ProjectContextService` directly instead of reaching it through the container, the way `repoIntel`, `intent` and `blast` all are. Costs the `ContainerOverrides` injection seam every sibling capability has, makes `reviews` depend on a concrete class in another module, and its justifying comment cites the wrong precedent — the `intent/block.js` import above it is justified as a **leaf** (contract types only), while `project-context/service.ts` imports the container and is not one | 1 | **fixed** |
+| C1 | code-review | **major** | The projection can never apply the cross-repo skip. `service.ts:250` passes `att.repoId` as `reviewRepoId`, so `readAttachment`'s guard at `:286` is `x !== x` — permanently false. A multi-repo agent's projection injects documents the run skips, so AC-26's "agree exactly" fails. Root cause is structural: the projection endpoint takes no repo | 1 | **fixed** |
+| C2 | code-review | **major** | No dedupe in `resolveForAgent` (`repository.ts:234-243`). The partial unique indexes are per target kind, so a document attached directly **and** via an enabled skill arrives twice, is rendered twice into the prompt, and pays the budget twice — possibly pushing a different document out. `usageCounts` dedupes this exact case for display, so the page says 1 while the run sends 2. Knock-ons: a React duplicate `key`, and `specsReadFor`'s path-keyed reason map overwriting one cause with another | 1 | **fixed** |
+| C3 | code-review | **major** | `attachedPaths` ignores `repo_id` (`AgentsTab.tsx:35-38,63`, `SkillsTab.tsx:26-29,71`); the server lists attachments by workspace and target only. Two repos with the same path: the toggle renders on for a document that is not attached here, and detaching removes **the other repository's** attachment. One predicate fixes it | 1 | **fixed** |
+| C4 | code-review | minor | `usageCounts` splits its composite key on the **first** space (`repository.ts:282-287`), and paths may contain spaces. `docs/my notes.md` parses as `docs/my`, so a document in use renders "—" and a phantom bucket appears | 1 | **fixed** |
+| C5 | code-review | minor | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's `assembly.specs` does not. The demo artefact shows the exact heading-vs-`assembly.specs` conflation BQ-1 exists to prevent | 1 | **fixed** |
+| C6 | code-review | minor | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** — the `any` flag is dead code | 1 | **fixed** |
+| **S1** | **security-review** | **BLOCKER** | **The read gate enforces containment but not the allow-list.** The `.md` filter, the doc-directory allow-list and `EXCLUDED_DIRS` live **only inside `walkDir`**; neither `attach()` (`service.ts:113-177`) nor `readDoc()` (`discovery.ts:195-220`) applies any of them. Proved by executing the real module: `readDoc('.git/config')` returns `url = https://x-access-token:ghp_…@github.com/…`. That PAT is a **single global secret**, written verbatim into `.git/config` by `git clone` and never rewritten. Attach it, and on the next run it goes to the LLM provider **and** is persisted into `prompt_assembly`, which the trace drawer renders in full. `.env` and any source file read the same way | 1 | **fixed** |
+| S2 | security-review | **major** | The per-target cap does not bound per-run reads. `resolveForAgent` returns the agent's 20 **plus 20 per enabled linked skill**, and `linkSkill` is an unbounded upsert — so the real ceiling is `20 × (1 + N_skills)`, every one `stat`-ed, read and **tokenized before the budget drops anything**. 100 skills ≈ 2 020 reads, ~129 MB. Fires on the run **and** on the uncached projection route | 1 | **fixed** |
+| C7 | code-review | test quality | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string — as its "secret"; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; and `reviews.it.test.ts:750` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion | 1 | **fixed** |
 
 ## Decisions
 
@@ -75,4 +75,44 @@ what makes a later failure attributable.
 
 ## Open at the end
 
-*(nothing yet)*
+### Nine minors, deliberately held out of round 1
+
+The fix brief scoped round 1 to the blocker and the five majors, because scope creep in a fix
+round is how a reviewable diff stops being reviewable. These are the remainder, unchanged:
+
+| # | Item |
+|---|---|
+| C4 | `usageCounts` splits its composite key on the **first** space (`repository.ts:311-312`), so `docs/my notes.md` parses as `docs/my` — a document in use renders "—", plus a phantom bucket |
+| C5 | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's does not. The demo artefact shows the exact conflation BQ-1 exists to prevent |
+| C6 | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** |
+| C7 | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; `reviews.it.test.ts` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion |
+| S3 | The untrusted fence escape is exact-match and case-sensitive; `</UNTRUSTED>`, `</untrusted >` and a forged **opening** tag all survive. Pre-existing shared code, new consumer |
+| S4 | Non-UUID ids in the body/query reach UUID columns → PG `22P02` → 500 with the raw Postgres message echoed. `IdParams` exists to prevent exactly this |
+| S5 | `path` has no max length and `order` no bounds; on the not-cloned attach path a >2 704-byte path blows the btree limit — the failure mode already documented for `symbols.name` in the same schema file |
+| S6 | `isSafeRelPath` accepts control characters, and the path is interpolated into log message strings |
+| S7 | The attachment-count cap is a read-then-insert TOCTOU with no DB-level backstop, unlike the duplicate case |
+
+### Three rows the verifier could not settle
+
+- **AC-24's e2e half.** Flow 08 passed **26 of its 37 steps** on this machine and failed at step 27 — the shared PR-list navigation, not its own logic. Steps 28–37 are the trace-drawer assertions. **AC-14 is materially green**: every one of its assertions passed. Settled by running with `HOME` scoped away from a real PAT, as the implementing track did (1/1, 37 steps), or by CI.
+- **§7's latency figures** — 2 s discovery for 500 documents, sub-500 ms run injection. The plan already listed these as unverifiable without a clone at scale.
+- **`db:generate`** was not re-run, because re-running it on a settled schema is a write. In its place, the integration suite applies `0014` from scratch on a fresh PG16 container every run.
+
+### One spec deviation, correctly named
+
+`MAX_DOCS_PER_RESOLUTION = 40` adds a **sixth** skip cause that REQ-12 does not enumerate, and
+above 40 documents REQ-11's "documents attached to that agent plus those from its enabled linked
+skills are read" no longer holds for the tail. It is applied on both the projection and the run
+path through one function, so AC-26/AC-27 equality is preserved, and skipped documents still
+appear with a reason. No AC exercises that configuration and none fails. The constant's own
+comment states the judgement.
+
+### Plan defects worth carrying into `/retro`
+
+- **S8's "Done when" is now narrower than the code** — the fix round made `repo_id` required and
+  the step text was never amended, so a reader grading S8 literally would flag correct code.
+- **Two steps name file sets incomplete for their own "Done when"**: S3 cannot be done without
+  `db/schema.ts`, S16 cannot be done without `agents/[id]/page.tsx`. Both were edited anyway.
+- **S11's "Done when" is not satisfiable as written** — "reverts the toggle" presumes an
+  optimistic update the hooks deliberately do not perform. It describes one of two valid designs
+  as if it were the requirement.
