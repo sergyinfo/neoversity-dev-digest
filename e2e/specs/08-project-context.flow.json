@@ -1,0 +1,82 @@
+{
+  "name": "Project Context page, both tabs, the budget projection's drop marking, the Agent Editor's read-only Context tab, and the run trace's project-context block",
+  "description": "S18 of docs/plans/project-context.md. The seeded demo repo's `clone_path` points at a committed fixture clone (server/test/fixtures/context-clone) rather than a real git clone, so discovery has something to walk. `/context` renders the discovered documents — `docs/a.md` (leading-segment match), `server/docs/intent-layer.md` (NON-leading-segment match, D-2a — the case a prefix rule would miss), and `.devdigest/specs/prd.md` (the `.devdigest/specs/` prefix predicate, AC-4); the two committable negatives (root `README.md`, `src/notes.md`) are never asserted present, by construction. The Agents tab (default) is exercised against the seeded Security Reviewer, which has two real attachments (S18 seed): `server/docs/intent-layer.md` (fits the 8,000-token project-context budget — 'Injected') and a deliberately oversized `docs/large-notes.md` (~9,100 tokens on its own — 'Dropped (over budget)'), so the projection's drop marking is asserted against a real computed outcome, not a mocked one. The Skills tab is exercised too, in its correct empty state — this seed adds no skills. The Agent Editor's read-only Context tab (BQ-2/b) is then confirmed to render the SAME projection via the SAME `ProjectionSummary` component. Finally, PR #482's seeded Security Reviewer run — which now carries a real `run_traces` row (S18 seed, built by calling the actual `assembleProjectContext`/`specsReadFor` against the same fixture) — is opened in the trace drawer to confirm 'Specs read' lists both attachments with their real outcome strings and the 'Project context (dynamic)' prompt block expands to the actual injected text (AC-24's e2e half). The flow never presses Toggle on any document row (that would attach/detach for real) and never triggers a review run — no POST is made anywhere in this flow — which is how AC-14/AC-24 are satisfied without a model call, the same structural guarantee flow `09` uses for AC-34. Read-only seeded data. Assumes a freshly-seeded DB (see e2e/README.md).",
+  "steps": [
+    { "cmd": ["open", "{BASE}/context"], "label": "load the Project Context page" },
+    { "cmd": ["wait", "--url", "/context"], "label": "context route reached" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "the document listing settles" },
+    { "cmd": ["wait", "--text", "Project Context"], "label": "page title renders" },
+    { "cmd": ["wait", "--text", "docs/a.md"], "label": "leading-segment discovery case is listed" },
+    {
+      "cmd": ["wait", "--text", "server/docs/intent-layer.md"],
+      "label": "NON-leading-segment discovery case is listed (D-2a) — a prefix rule would have missed this"
+    },
+    {
+      "cmd": ["wait", "--text", ".devdigest/specs/prd.md"],
+      "label": "the .devdigest/specs/ prefix predicate is listed (AC-4)"
+    },
+
+    { "cmd": ["find", "text", "Security Reviewer", "click"], "label": "select the agent both seeded attachments belong to" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "the agent's attachments and projection settle" },
+    {
+      "cmd": ["wait", "--text", "Injected"],
+      "label": "the small, in-budget attachment is projected as injected"
+    },
+    {
+      "cmd": ["wait", "--text", "Dropped (over budget)"],
+      "label": "the projection's DROP MARKING renders for the real oversized attachment (docs/large-notes.md, ~9,100 tokens alone)"
+    },
+    {
+      "cmd": ["wait", "--text", "322 / 8,000 tokens"],
+      "label": "the section total is the server's own count (heading + one injected wrapper), not a client-side sum of the rows"
+    },
+
+    { "cmd": ["find", "role", "button", "click", "--name", "Skills"], "label": "switch to the Skills tab" },
+    { "cmd": ["wait", "--text", "No skills yet"], "label": "the Skills tab renders its correct empty state — this seed adds no skills" },
+
+    { "cmd": ["open", "{BASE}/agents"], "label": "AC-14/BQ-2b — the Agent Editor's read-only Context tab" },
+    { "cmd": ["wait", "--url", "/agents"], "label": "agents route reached" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "agents list settles" },
+    { "cmd": ["find", "text", "Security Reviewer", "click"], "label": "open the same agent's editor" },
+    { "cmd": ["wait", "--url", "/agents/"], "label": "agent editor route reached" },
+    { "cmd": ["find", "role", "button", "click", "--name", "Context"], "label": "switch to the read-only Context tab" },
+    { "cmd": ["wait", "--url", "tab=context"], "label": "context tab is active in the URL" },
+    {
+      "cmd": ["wait", "--text", "Documents this agent sends as project context on a run"],
+      "label": "the tab's read-only intro renders"
+    },
+    { "cmd": ["wait", "--text", "server/docs/intent-layer.md"], "label": "the same projection entry renders here (same ProjectionSummary, same endpoint)" },
+    { "cmd": ["wait", "--text", "Dropped (over budget)"], "label": "the same drop marking renders here too" },
+
+    { "cmd": ["open", "{BASE}/"], "label": "the trace drawer's project-context block (AC-24 e2e half)" },
+    { "cmd": ["wait", "--url", "/pulls"], "label": "land on the PR list" },
+    { "cmd": ["find", "text", "Add rate limiting to public API endpoints", "click"], "label": "open the PR row" },
+    { "cmd": ["wait", "--url", "/pulls/482"], "label": "navigate to the PR detail route" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "PR detail data settles" },
+    { "cmd": ["find", "role", "button", "click", "--name", "Agent runs"], "label": "switch to the Agent runs tab" },
+    { "cmd": ["wait", "--url", "tab=findings"], "label": "findings tab is active in the URL" },
+    {
+      "cmd": ["find", "role", "button", "click", "--name", "Open run trace & logs"],
+      "label": "open the seeded Security Reviewer run's trace drawer (no run is started — this reads a persisted trace)"
+    },
+    { "cmd": ["wait", "--text", "Specs read"], "label": "the trace's Specs read row renders" },
+    {
+      "cmd": ["wait", "--text", "server/docs/intent-layer.md"],
+      "label": "the injected attachment is listed as a bare path (AC-24)"
+    },
+    {
+      "cmd": ["wait", "--text", "docs/large-notes.md — dropped for budget (8000 tokens)"],
+      "label": "the dropped attachment is listed with its real reason string, produced by the actual assembler (AC-24)"
+    },
+    { "cmd": ["find", "text", "Prompt assembly", "click"], "label": "the Prompt assembly section is collapsed by default — open it" },
+    {
+      "cmd": ["wait", "--text", "Project context (dynamic)"],
+      "label": "the Project context prompt block renders, collapsed"
+    },
+    { "cmd": ["find", "text", "Project context (dynamic)", "click"], "label": "expand it to the full injected text" },
+    {
+      "cmd": ["wait", "--text", "Intent Layer — design notes"],
+      "label": "the actual injected document text is visible (AC-24) — the real fixture content, not a mock"
+    }
+  ]
+}

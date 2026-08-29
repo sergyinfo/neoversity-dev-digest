@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { createDb, type Db } from './client.js';
 import * as t from './schema.js';
 import { eq, and } from 'drizzle-orm';
@@ -16,10 +18,32 @@ import {
 } from '../modules/brief/fingerprint.js';
 import { ASSEMBLER_VERSION } from '../modules/brief/constants.js';
 import type { BriefDocument, BriefProvenance } from '../modules/brief/contract.js';
+import { resolveCloneRoot, readDoc } from '../modules/project-context/discovery.js';
+import { assembleProjectContext, specsReadFor, type ResolvedDoc } from '../modules/project-context/assemble.js';
+import { PROJECT_CONTEXT_TOKEN_BUDGET } from '../modules/project-context/constants.js';
+import { saveRunTrace } from '../modules/reviews/repository/run.repo.js';
+import { TiktokenTokenizer } from '../adapters/tokenizer/index.js';
+import type { RunTrace } from '@devdigest/shared';
 
 /** Default provider/model for the built-in reviewer agents. */
 const DEFAULT_PROVIDER = 'openrouter' as const;
 const DEFAULT_MODEL = 'deepseek/deepseek-v4-flash';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * L05 (S18) — the fixture `project-context`'s e2e flow `08` (and any test
+ * pointed at the seeded demo repo) reads. Its contents are not arbitrary —
+ * see `server/test/fixtures/context-clone/` for what each file proves:
+ * a leading-segment match (`docs/a.md`), a NON-leading-segment match
+ * (`server/docs/intent-layer.md`, the D-2a case a prefix rule would miss),
+ * the `.devdigest/specs/` prefix predicate, two committable negatives
+ * (`README.md`, `src/notes.md`), and one deliberately oversized document
+ * (`docs/large-notes.md`) sized to exceed `PROJECT_CONTEXT_TOKEN_BUDGET` on
+ * its own so the projection's "Dropped (over budget)" outcome has something
+ * real to mark rather than a synthetic one.
+ */
+const CONTEXT_CLONE_PATH = join(__dirname, '..', '..', 'test', 'fixtures', 'context-clone');
 
 /**
  * Seed the starter's demo data. Idempotent: re-running upserts the default
@@ -93,7 +117,10 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         name: 'payments-api',
         fullName: 'acme/payments-api',
         defaultBranch: 'main',
-        clonePath: null,
+        // L05 (S18): points at a real, committed fixture clone rather than
+        // `null`, so `project-context` discovery has something to walk
+        // without an actual `git clone`. See `CONTEXT_CLONE_PATH` above.
+        clonePath: CONTEXT_CLONE_PATH,
         createdBy: userId,
       })
       .returning();
@@ -602,20 +629,26 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
       ),
     );
 
-  if (seededReview && !seededReview.runId) {
-    const [securityAgent] = await db
-      .select({ id: t.agents.id, provider: t.agents.provider, model: t.agents.model })
-      .from(t.agents)
-      .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, 'Security Reviewer')));
+  const [securityAgentForContext] = await db
+    .select({ id: t.agents.id, provider: t.agents.provider, model: t.agents.model })
+    .from(t.agents)
+    .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, 'Security Reviewer')));
 
+  // `seededReview.runId` is read before the run below may set it, so track the
+  // id separately rather than re-reading the (stale, in-memory) `seededReview`
+  // after the insert — needed further down to attach a run trace on EVERY
+  // seed pass, not only the first one that creates the row.
+  let timelineRunId: string | null = seededReview?.runId ?? null;
+
+  if (seededReview && !seededReview.runId) {
     const [run] = await db
       .insert(t.agentRuns)
       .values({
         workspaceId,
-        agentId: securityAgent?.id ?? null,
+        agentId: securityAgentForContext?.id ?? null,
         prId: seededReview.prId,
-        provider: securityAgent?.provider ?? null,
-        model: securityAgent?.model ?? null,
+        provider: securityAgentForContext?.provider ?? null,
+        model: securityAgentForContext?.model ?? null,
         status: 'done',
         durationMs: 8_400,
         tokensIn: 9_119,
@@ -635,8 +668,120 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
     // Link both ways: the timeline joins run → review through this column.
     await db
       .update(t.reviews)
-      .set({ runId: run!.id, agentId: securityAgent?.id ?? null })
+      .set({ runId: run!.id, agentId: securityAgentForContext?.id ?? null })
       .where(eq(t.reviews.id, seededReview.id));
+
+    timelineRunId = run!.id;
+  }
+
+  // ---- L05 (S18): project-context attachments on Security Reviewer --------
+  //
+  // Two attachments, both against the fixture clone above:
+  //   - `server/docs/intent-layer.md` (order 0) — small, injected.
+  //   - `docs/large-notes.md` (order 1) — deliberately oversized (see the
+  //     fixture comment), dropped for budget. Its presence is what lets the
+  //     e2e flow (and the Agent Editor's read-only Context tab, BQ-2/b) show
+  //     a REAL "Dropped (over budget)" outcome rather than only ever showing
+  //     "Injected".
+  //
+  // Select-then-insert, matching the guard pattern this file uses everywhere
+  // else, since `context_attachments` has no natural "upsert on name" key —
+  // the F1 partial unique index would otherwise throw on a second seed pass.
+  if (securityAgentForContext) {
+    const attachmentSpecs: Array<{ path: string; order: number }> = [
+      { path: 'server/docs/intent-layer.md', order: 0 },
+      { path: 'docs/large-notes.md', order: 1 },
+    ];
+    for (const spec of attachmentSpecs) {
+      const [existingAttachment] = await db
+        .select({ id: t.contextAttachments.id })
+        .from(t.contextAttachments)
+        .where(
+          and(
+            eq(t.contextAttachments.workspaceId, workspaceId),
+            eq(t.contextAttachments.agentId, securityAgentForContext.id),
+            eq(t.contextAttachments.repoId, repoId),
+            eq(t.contextAttachments.path, spec.path),
+          ),
+        );
+      if (!existingAttachment) {
+        await db.insert(t.contextAttachments).values({
+          workspaceId,
+          repoId,
+          agentId: securityAgentForContext.id,
+          path: spec.path,
+          order: spec.order,
+        });
+      }
+    }
+  }
+
+  // ---- L05 (S18): a run trace demonstrating project context -------------
+  //
+  // Without this, opening the seeded timeline run's trace drawer shows
+  // "no trace" (no `run_traces` row was ever saved for a hand-inserted
+  // `agent_runs` row) — nothing to assert AC-24's "Specs read" list or the
+  // "Project context (dynamic)" prompt block against. `prompt_assembly.specs`
+  // and `specs_read` are computed by calling the SAME `assembleProjectContext`
+  // / `specsReadFor` functions the real run path and the projection endpoint
+  // call, against the SAME fixture clone the attachments above point at —
+  // not hand-written — for the reason already recorded for `pr_brief`
+  // (`server/INSIGHTS.md` 2026-08-28): a fixture claiming to reflect real
+  // assembly must be produced by the functions that do the assembling, not a
+  // parallel hand-authored guess that can silently drift from them.
+  if (timelineRunId && securityAgentForContext) {
+    const contextRoot = await resolveCloneRoot(CONTEXT_CLONE_PATH);
+    if (contextRoot.ok) {
+      const tokenizer = new TiktokenTokenizer();
+      const docs: ResolvedDoc[] = [];
+      for (const rel of ['server/docs/intent-layer.md', 'docs/large-notes.md']) {
+        const read = await readDoc(contextRoot.root, rel);
+        docs.push({
+          path: rel,
+          origin: 'agent',
+          content: read.ok ? read.content : null,
+          skipReason: read.ok ? undefined : read.reason,
+        });
+      }
+      const assembled = assembleProjectContext(docs, tokenizer, {
+        budgetTokens: PROJECT_CONTEXT_TOKEN_BUDGET,
+      });
+
+      const trace: RunTrace = {
+        config: {
+          agent: 'Security Reviewer',
+          version: '1',
+          provider: securityAgentForContext.provider,
+          model: securityAgentForContext.model ?? DEFAULT_MODEL,
+          pr: 482,
+          source: 'local',
+        },
+        stats: {
+          duration_ms: 8_400,
+          tokens_in: 9_119,
+          tokens_out: 1_240,
+          cost_usd: 0.0013,
+          findings: 10,
+          grounding: '10/10 passed',
+        },
+        prompt_assembly: {
+          system: SECURITY_REVIEWER_PROMPT,
+          skills: null,
+          memory: null,
+          specs: assembled.sectionText || null,
+          user: 'Review PR #482 — see the Files changed tab for the diff.',
+        },
+        tool_calls: [],
+        raw_output: JSON.stringify({ verdict: 'request_changes', score: 42 }),
+        memory_pulled: [],
+        specs_read: specsReadFor(assembled),
+        log: [
+          { t: '00.10', kind: 'info', msg: 'Starting review with agent Security Reviewer' },
+          { t: '00.90', kind: 'result', msg: 'Citation grounding: 10/10 passed' },
+        ],
+      };
+      await saveRunTrace(db, timelineRunId, trace);
+    }
   }
 
   return { workspaceId, userId };
