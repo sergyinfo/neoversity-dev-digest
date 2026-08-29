@@ -10,25 +10,25 @@ Ceiling: **12** — the plan's counted envelope of 11, plus `doc-writer` added a
 | # | Stage | Status | Artefact / result |
 |---|---|---|---|
 | 0 | Intake & baseline | **done** | Tree clean at `a8273db`; baseline captured before anything changed, all green |
-| 1 | Implementation (T0–T6) | pending | — |
-| 2 | Review ×3 | pending | — |
+| 1 | Implementation (T0–T6) | **done** | all 7 tracks landed, `55a1639`…`aa7bf6c` |
+| 2 | Review ×3 | **in progress** | boundary: **1 major** · correctness and security running |
 | 3 | Fix loop (≤2 rounds) | pending | — |
 | 4 | Verification | pending | — |
 | 5 | Land | pending | — |
 
-**Agent count: 0 / 12.**
+**Agent count: 10 / 15** — ceiling raised from 12 at the Stage 1→2 boundary so the fix rounds are funded.
 
 ### Tracks
 
 | Track | Scope | Model | Agent | Status | Commit |
 |---|---|---|---|---|---|
-| T0 | `SpecFile` +3 optional fields, mirrored; module-local contracts | opus | — | pending | — |
-| T1 | Attachment table + generated migration + constraint test | opus | — | pending | — |
-| T2 | Discovery, assemble, repository/service, routes, registry, run injection | opus | — | pending | — |
-| T3 | Client hooks, i18n, nav, `ProjectionSummary` | sonnet | — | pending | — |
-| T4 | `/context` page + `AgentEditor` Context tab | sonnet | — | pending | — |
-| T5 | Trace drawer tests (no implementation) | sonnet | — | pending | — |
-| T6 | e2e flow 08 + fixture clone + seed + INSIGHTS | sonnet | — | pending | — |
+| T0 | `SpecFile` +3 optional fields, mirrored; module-local contracts | opus | 1 | **done** | `55a1639` |
+| T1 | Attachment table + generated migration + constraint test | opus | 2 | **done** | `c38e5bc` |
+| T2 | Discovery, assemble, repository/service, routes, registry, run injection | opus | 4 | **done** | `d76b0bc` |
+| T3 | Client hooks, i18n, nav, `ProjectionSummary` | sonnet | 3 | **done** | `d413a0a` |
+| T4 | `/context` page + `AgentEditor` Context tab | sonnet | 5 | **done** | `06a3e03` |
+| T5 | Trace drawer tests (no implementation) | sonnet | 6 | **done** | `da8999b` |
+| T6 | e2e flow 08 + fixture clone + seed + INSIGHTS | sonnet | 7 | **done** | `aa7bf6c` |
 
 ## Baseline (pre-existing failures — never blamed on this change)
 
@@ -52,7 +52,7 @@ what makes a later failure attributable.
 
 | # | Source | Severity | Finding | Round | Outcome |
 |---|---|---|---|---|---|
-| — | — | — | *(none yet — Stage 2 has not run)* | — | — |
+| A1 | architecture-reviewer B3 | **major** | `run-executor.ts:19,289` imports and constructs `ProjectContextService` directly instead of reaching it through the container, the way `repoIntel`, `intent` and `blast` all are. Costs the `ContainerOverrides` injection seam every sibling capability has, makes `reviews` depend on a concrete class in another module, and its justifying comment cites the wrong precedent — the `intent/block.js` import above it is justified as a **leaf** (contract types only), while `project-context/service.ts` imports the container and is not one | 1 | open |
 
 ## Decisions
 
