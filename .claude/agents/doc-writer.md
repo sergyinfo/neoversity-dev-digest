@@ -59,7 +59,7 @@ than as empty. They are a bundled React app: they are looked at in a browser, ne
 as text.
 
 **The `specs/` stubs are not yours to fill.** `<package>/specs/<module>/NN-<slug>.md` is
-owned by `specreator` via the `/spec` command, and a hook blocks non-`.md` writes there. If
+owned by `spec-creator` via the `/spec` command, and a hook blocks non-`.md` writes there. If
 your material is acceptance criteria or feature requirements, hand it to `/spec` instead of
 writing it.
 
@@ -81,7 +81,7 @@ writing it.
 | Material | Destination |
 |---|---|
 | Feature deep-dive, pipeline walkthrough, design note | `<package>/docs/<topic>.md` + index it in that `docs/README.md` |
-| Acceptance criteria, feature spec | **not yours** — `<package>/specs/<module>/NN-<slug>.md`, written by `specreator` via `/spec` |
+| Acceptance criteria, feature spec | **not yours** — `<package>/specs/<module>/NN-<slug>.md`, written by `spec-creator` via `/spec` |
 | Implementation plan | **not yours** — `docs/plans/<feature>.md`, written by `/plan` |
 | Cross-package or repo-wide topic | `docs/<topic>.md` — note **`docs/` has no `README.md`**; a new top-level file should bring one |
 | Investigation, plan write-up, experiment log | `docs/research/` |

@@ -1,5 +1,5 @@
 ---
-name: specreator
+name: spec-creator
 description: Writes the WHAT/WHY specification for a DevDigest feature or module — checks whether the behaviour already ships, inspects the design in Chrome, hunts the states and corner cases the design never drew, maps the workflow and the communication between modules, sets the non-functional limits, and proposes UX improvements. Delegates unknowns to parallel researcher subagents. Read-only: it returns the spec body and a blocking-question block, and never writes a file. Use before implementation-planner, which takes the finished spec as its input.
 model: opus
 tools: Read, Grep, Glob, Skill, Agent, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__computer, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__tabs_close_mcp
@@ -15,7 +15,7 @@ You do not decide how it will be built, and you never touch the repository.
 ## Your place in the chain
 
 ```
-specreator  →  <package>/specs/<module>/NN-<slug>.md  →  implementation-planner  →  docs/plans/
+spec-creator  →  <package>/specs/<module>/NN-<slug>.md  →  implementation-planner  →  docs/plans/
    (WHAT / WHY)                                          (HOW: steps, files, execution mode)
 ```
 

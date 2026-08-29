@@ -5,7 +5,7 @@ holding a numbered series of specs: `<module>/NN-<slug>.md` (`01-`, `02-`, … f
 `e2e/specs` precedent). A spec states WHAT and WHY — requirements, acceptance criteria,
 corner cases, workflow, module communication, contract expectations — and never HOW; steps
 and files are `implementation-planner`'s output in `docs/plans/`. Written by `/spec`; see
-`.claude/agents/specreator.md`. Numbers are never reused or renumbered.
+`.claude/agents/spec-creator.md`. Numbers are never reused or renumbered.
 
 ## Index
 

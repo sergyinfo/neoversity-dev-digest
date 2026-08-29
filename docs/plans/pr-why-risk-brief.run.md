@@ -46,7 +46,7 @@ re-flag it, and rewriting it would touch commits this branch does not own.
 Commits from T2 onward took new SHAs; the table above and below carries the new ones.
 Pre-rewrite state is kept at `backup/pre-secret-rewrite` locally.
 
-**Agent count: 17 / 17 — at the ceiling.** One `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2, two fix rounds, one `specreator` for the D-16 revision, one `plan-verifier`, and one more `implementer` for round 3. (A 17th launch died on an API error before writing anything and is not counted — it did no work.)
+**Agent count: 17 / 17 — at the ceiling.** One `implementer` per track T0–T7, `doc-writer` for T8, three reviewers at Stage 2, two fix rounds, one `spec-creator` for the D-16 revision, one `plan-verifier`, and one more `implementer` for round 3. (A 17th launch died on an API error before writing anything and is not counted — it did no work.)
 
 ### Tracks
 

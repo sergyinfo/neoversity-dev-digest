@@ -223,7 +223,7 @@ for still fails.
   the implementer. When a run ends with behavioural changes and no new test, say so in the
   final report — a quiet coverage gap is worse than an acknowledged one. Run the agent
   manually when a change deserves a proper suite.
-- **`specreator` and `implementation-planner` are off** — they are invoked by hand through
+- **`spec-creator` and `implementation-planner` are off** — they are invoked by hand through
   `/spec` and `/plan`, and this command never substitutes for either.
 
 ## Rules that hold across the whole run

@@ -52,7 +52,7 @@ implementer writes it. Invoke `test-writer` by hand when a change deserves a rea
 | Agent | Model | Can write files | Invoke when |
 |-------|-------|-----------------|-------------|
 | [researcher](researcher.md) | `sonnet` | no | A question needs digging across many files or external sources, and you want the conclusion plus its evidence |
-| [specreator](specreator.md) | `opus` | no | A feature should be agreed on before it is planned — requirements, acceptance criteria, corner cases, workflow, module communication, UX gaps in the design |
+| [spec-creator](spec-creator.md) | `opus` | no | A feature should be agreed on before it is planned — requirements, acceptance criteria, corner cases, workflow, module communication, UX gaps in the design |
 | [implementation-planner](implementation-planner.md) | `opus` | no | Before any non-trivial implementation — it audits the requirements first, asks what is ambiguous, recommends what could be better, then plans; ends by asking single-agent vs multi-agent execution |
 | [implementer](implementer.md) | `inherit` | **yes** | An approved plan exists and needs to be executed |
 | [test-writer](test-writer.md) | `sonnet` | **yes** | Manual only — a change deserves a real suite beyond the `Test:` line in its plan step |
@@ -64,7 +64,7 @@ implementer writes it. Invoke `test-writer` by hand when a change deserves a rea
 
 ```mermaid
 flowchart LR
-    R[researcher] -->|findings + evidence| S[specreator]
+    R[researcher] -->|findings + evidence| S[spec-creator]
     S -->|spec body + blocking questions| SC{{"/spec"}}
     SC -->|specs/module/NN-slug.md| P[implementation-planner]
     R -->|findings + evidence| P
@@ -90,7 +90,7 @@ the user, asks the execution mode, and persists `docs/plans/<feature>.md`. The s
 a recommendation the user never accepted must not appear in the steps, and the execution
 mode must be chosen by a human before anything runs.
 
-**The spec/plan split is the point.** `specreator` answers *what and why* and stops;
+**The spec/plan split is the point.** `spec-creator` answers *what and why* and stops;
 `implementation-planner` answers *how* and never edits the answer to *what*. A spec may
 carry a workflow diagram, a module-interaction table, and contract expectations — those are
 agreements — but never a file path, a step list, or a code block. Both agents are read-only
@@ -169,7 +169,7 @@ The **Not established** section is mandatory; an empty one is a claim of complet
 
 ---
 
-## specreator
+## spec-creator
 
 **Responsibility.** Writes the specification a team agrees on before anyone plans: the
 problem, the scope and its non-goals, testable requirements with acceptance criteria, the
@@ -186,7 +186,7 @@ no way to touch the filesystem, and `/spec` is the only thing that persists its 
 It is the **only agent here holding `Agent`**, for one purpose: fanning out `researcher`
 subagents (up to three in parallel, one falsifiable question each) for third-party
 behaviour, prior art, and the git archaeology it cannot do without `Bash`. Researchers
-return evidence; the requirements stay the specreator's. `Skill` is limited by prose to
+return evidence; the requirements stay the spec-creator's. `Skill` is limited by prose to
 `mermaid-diagram` and `consult-insights` — every implementation skill is explicitly
 off-limits, because opening `postgresql-table-design` is the shortest path from a
 specification into a schema. `find-docs` needs `npx ctx7` and therefore `Bash`, so external
@@ -209,7 +209,7 @@ repo and have it compile, it went too far.*
 `## 12. Traceability` table as a coverage checklist, and turns its open questions into
 blocking ones.
 
-**Spec status is a gate, not decoration:** `specreator` writes `draft`, **a human sets
+**Spec status is a gate, not decoration:** `spec-creator` writes `draft`, **a human sets
 `approved`** after reading it, and `/spec` flips it to `superseded` when a later number
 replaces it. `/plan` **refuses to plan anything that is not `approved`** and never edits a
 spec's frontmatter — planning a draft is how an unagreed requirement becomes a merged

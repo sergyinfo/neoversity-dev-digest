@@ -1,5 +1,5 @@
 ---
-description: Write or revise the WHAT/WHY specification for one DevDigest module — runs the specreator agent, settles its blocking questions with you, then persists the spec as <package>/specs/<module>/NN-<slug>.md for implementation-planner to consume
+description: Write or revise the WHAT/WHY specification for one DevDigest module — runs the spec-creator agent, settles its blocking questions with you, then persists the spec as <package>/specs/<module>/NN-<slug>.md for implementation-planner to consume
 argument-hint: <feature> [in <package>/<module>]
 allowed-tools: Task, AskUserQuestion, SendMessage, Read, Write, Edit, Glob, Grep, Bash(date:*), Bash(ls:*), Bash(mkdir:*), mcp__claude-in-chrome__gif_creator
 model: opus
@@ -7,7 +7,7 @@ model: opus
 
 # /spec — create or revise a module specification
 
-You are the thin wrapper around the `specreator` agent. The agent thinks and cannot write;
+You are the thin wrapper around the `spec-creator` agent. The agent thinks and cannot write;
 **you are the only thing that touches the filesystem**, and the only path you may write is
 `<package>/specs/<module>/`. If you ever find yourself about to write anywhere else, stop
 and report it instead.
@@ -29,7 +29,7 @@ Do these yourself before spawning anything — the agent has no `Bash`:
 
 ## 2. Run the agent
 
-Spawn `specreator` (`subagent_type: "specreator"`) with: the feature request verbatim,
+Spawn `spec-creator` (`subagent_type: "spec-creator"`) with: the feature request verbatim,
 today's date, the target guess, the numbers already taken, and the design paths. Ask for
 its three sections — spec body, blocking questions, handoff.
 
