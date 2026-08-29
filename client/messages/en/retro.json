@@ -1,0 +1,22 @@
+{
+  "page": {
+    "crumbLab": "Skills Lab",
+    "crumbRetro": "Retro Ledger",
+    "title": "Retro ledger",
+    "subtitle": "Retrospectives on how the spec → plan → implement → review → verify pipeline performed — the process itself, not the code it produced.",
+    "fileLabel": "Reading {path}",
+    "updatedAt": "File last changed {date}",
+    "updatedUnknown": "Never written",
+    "loadError": "Could not load the retro ledger."
+  },
+  "empty": {
+    "noFileTitle": "No ledger yet",
+    "noFileBody": "Nothing has been written to {path}. The ledger records how the SDD pipeline performed — where a spec was thin, where a plan missed a step, which review findings were real. It is written by the /retro slash command, which runs only when a human types it; nothing in DevDigest starts one.",
+    "noEntriesTitle": "No retrospectives recorded yet",
+    "noEntriesBody": "The ledger exists but has no entries. Each entry opens by checking whether the previous entry's proposals were applied and whether they helped. Entries are added by the /retro slash command, which runs only when a human types it — nothing in DevDigest starts one, and this page never writes to the file."
+  },
+  "scope": {
+    "title": "What does not go here",
+    "body": "Findings about the codebase — gotchas, conventions, library quirks — belong in a package's INSIGHTS.md, not in this ledger. A finding in the wrong home is lost to the reader who needs it."
+  }
+}
