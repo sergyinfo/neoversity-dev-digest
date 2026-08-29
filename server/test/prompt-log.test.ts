@@ -3,6 +3,10 @@ import type { PromptAssembly } from '@devdigest/shared';
 import { describePromptAssembly } from '../src/modules/reviews/prompt-log.js';
 import { loadConfig } from '../src/platform/config.js';
 import { RunLogger } from '../src/platform/run-logger.js';
+import {
+  assembleProjectContext,
+  specsReadFor,
+} from '../src/modules/project-context/assemble.js';
 
 /**
  * Planted secrets. Every one of these strings is put INTO the assembly, and the
@@ -134,6 +138,93 @@ describe('describePromptAssembly', () => {
         if (typeof value === 'string') expect(value.length).toBeLessThanOrEqual(32);
       }
     }
+  });
+});
+
+/**
+ * L05 (R4) — §7's observability-safety rule extended to the NEW channel.
+ *
+ * The existing guards above cover `PromptAssembly`. Project Context adds a
+ * second way for document text to escape: a SKIP REASON. §7 is explicit — "a
+ * reason names a path and a cause, never content" — and a reason is the one
+ * field an implementer is tempted to make helpful by quoting the document
+ * ("empty after stripping: '<first line>'"). So the same planted-secret
+ * technique is applied to it, mechanically, rather than left to review.
+ *
+ * `prompt-log.ts` itself is deliberately NOT modified by this feature; this
+ * block sits here because this is where the repo keeps its leak guards.
+ */
+describe('project-context skip reasons never carry document content (§7, R4)', () => {
+  const DOC_SECRET = 'sk_live_PROJECTCTX_9zQ4';
+  const DOC_BODY = `INTERNAL: rotate ${DOC_SECRET} before launch`;
+
+  const tokenizer = { count: (t: string) => Math.ceil(t.length / 4) };
+
+  it('a dropped document is recorded by path and cause only', () => {
+    const result = assembleProjectContext(
+      [
+        { path: 'docs/pricing.md', origin: 'agent', content: DOC_BODY },
+        { path: 'docs/keys.md', origin: 'agent', content: DOC_BODY },
+      ],
+      tokenizer,
+      // A budget small enough that both documents are dropped.
+      { budgetTokens: 5 },
+    );
+
+    const serialized = JSON.stringify({
+      skipped: result.skipped,
+      dropped: result.dropped,
+      specsRead: specsReadFor(result),
+      entries: result.entries,
+    });
+
+    expect(result.dropped).toHaveLength(2);
+    expect(serialized).not.toContain(DOC_SECRET);
+    expect(serialized).not.toContain('INTERNAL');
+    expect(serialized).not.toContain('rotate');
+    // The path IS carried — that is the useful half, and the half REQ-14 needs.
+    expect(serialized).toContain('docs/pricing.md');
+  });
+
+  it('a skip reason supplied by the caller is passed through unquoted', () => {
+    // The service supplies reasons like "file not found or path refused". This
+    // asserts the assembler does not decorate them with anything it read.
+    const result = assembleProjectContext(
+      [
+        { path: 'docs/gone.md', origin: 'agent', content: null, skipReason: 'file not found' },
+        { path: 'docs/blank.md', origin: 'agent', content: `  ${DOC_SECRET.slice(0, 0)}  ` },
+      ],
+      tokenizer,
+    );
+    expect(result.skipped).toEqual([
+      { path: 'docs/gone.md', reason: 'file not found' },
+      { path: 'docs/blank.md', reason: 'empty document' },
+    ]);
+  });
+
+  it('`specs_read` lists every attachment, and the injected one carries no reason', () => {
+    const result = assembleProjectContext(
+      [
+        { path: 'docs/ok.md', origin: 'agent', content: DOC_BODY },
+        { path: 'docs/gone.md', origin: 'agent', content: null, skipReason: 'file not found' },
+      ],
+      tokenizer,
+    );
+    const specsRead = specsReadFor(result);
+    expect(specsRead).toEqual(['docs/ok.md', 'docs/gone.md — file not found']);
+    expect(JSON.stringify(specsRead)).not.toContain(DOC_SECRET);
+  });
+
+  it('the run-log line the executor emits is built from the same reason strings', () => {
+    // `run-executor` formats `project context: skipped ${path} — ${reason}`.
+    // Nothing else is interpolated, so if the reasons are clean the lines are.
+    const result = assembleProjectContext(
+      [{ path: 'docs/gone.md', origin: 'agent', content: null, skipReason: 'file not found' }],
+      tokenizer,
+    );
+    const lines = result.skipped.map((s) => `project context: skipped ${s.path} — ${s.reason}`);
+    expect(lines).toEqual(['project context: skipped docs/gone.md — file not found']);
+    expect(lines.join('\n')).not.toContain(DOC_SECRET);
   });
 });
 
