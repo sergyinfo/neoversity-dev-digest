@@ -20,9 +20,15 @@ The reviewer received the spec, the plan verbatim, and the repository constraint
 
 All three, via the planning agent — amended there rather than by hand, so the plan stays the artefact one author produced.
 
-1. **S3** — the uniqueness requirement is restated so it holds with a NULL in either FK column, and the "Done when" now demands a test that inserts the same attachment twice and expects the second to fail.
-2. **S4/S5** — the `.devdigest/specs` entry is either dropped as redundant or the two predicates are stated separately, and S5's "Done when" says which. The point is that no list entry silently does nothing.
-3. **S5/S8** — a clone directory that is configured but absent returns AC-2's empty-list-with-reason, not a 500, and the reason distinguishes it from never-cloned.
+**F1 — S3's uniqueness form replaced.** The four-column unique index is gone; S3 now specifies **two partial unique indexes**, `ctx_att_agent_repo_path_uq` and `ctx_att_skill_repo_path_uq`, each `WHERE <fk> IS NOT NULL`. `UNIQUE NULLS NOT DISTINCT` was rejected **on meaning, not capability** — it makes uniqueness depend on the `num_nonnulls` CHECK continuing to hold, so relaxing that CHECK would silently change the uniqueness rule. Both forms were verified generatable against the **installed** packages, not the docs: `pg-core/indexes.d.ts:67` exposes `where(condition: SQL)`, and drizzle-kit 0.30.6's `bin.cjs` emits both `${idx.where}` and `NULLS NOT DISTINCT`. Worth recording: `nullsNotDistinct()` lives on the **constraint** builder (`unique-constraint.d.ts:10`), not on `uniqueIndex()` — reaching for it there is a typecheck error and an easy mistake from memory.
+
+**F1 — S3 gained its own named test.** Its `Test` line changed from "covered by S8's integration tests" to a new `server/test/project-context-schema.it.test.ts`. **This is the one place the amendments changed step content rather than adding a clause:** a constraint needs a test that tries to violate it, and deferring to S8 was not that. S6 gained a clause so a duplicate attach returns a clean domain error rather than a raw unique-violation.
+
+**F2 — S4 split one list into two predicates.** `CONTEXT_DOC_DIR_SEGMENTS` (per **segment**) and `CONTEXT_DOC_PATH_PREFIXES` (leading **prefix**). `.devdigest/specs` is explicitly barred from the segment list. "State both predicates" was chosen over "drop as redundant" because `REFERENCE_DOC_DIRS` is owned by the **`intent` module** — if it ever loses `specs`, `.devdigest/specs/` discovery would vanish silently. S5 implements both and gained the test that makes the entry non-inert: the prefix case is asserted **with the segment list stubbed to exclude `specs`**, so it fails if the prefix branch is removed.
+
+**F3 — a third clone state, end to end.** S2's envelope gained `reason: 'not_cloned' | 'clone_missing' | null`; S5 resolves the clone root once per request through a helper that classifies its own failure (`ENOENT` ⇒ `clone_missing`, other errors ⇒ existing handling, **never a 500**); S8 requires all three outcomes distinguishable and none a 5xx; S11 carries the reason; S12 requires **two distinct copy strings**; S15 renders both as non-error empty states; and S10 gained a clause so a deleted clone skips every document and the run completes, rather than the containment call throwing opaquely.
+
+**Unchanged:** BQ-1…BQ-5, every recommendation decision, the track decomposition, the model assignments, the barriers, and the **agent count — still 11**. No step moved tracks and no track was added.
 
 ## Not applied
 

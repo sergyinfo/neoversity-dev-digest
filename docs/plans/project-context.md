@@ -3,13 +3,14 @@
 **Spec:** `server/specs/project-context/01-project-context.md` (`status: approved`, 2026-08-27) — binding.
 **Planned:** 2026-08-29.
 **All five blocking questions are answered** (BQ-1→a, BQ-2→b, BQ-3→a, BQ-4→a, BQ-5→a). **R1–R4 accepted; R5 kept as a note only; R6 declined.** **Execution mode chosen: multi-agent, 7 tracks.**
+**Amended 2026-08-29 after cross-review — F1 (unique-index NULL semantics), F2 (inert allow-list entry), F3 (clone path set but missing).** Resolutions are in their own section below.
 
 ## Requirements review
 
 | # | Requirement (as given) | Verdict | Evidence / what settles it |
 |---|---|---|---|
 | REQ-1 | Server returns discovered markdown, read live from the clone | **clear** | No `project-context` module: `server/src/modules/` holds 16 dirs, none of them this; the registry lists 14 modules (`server/src/modules/index.ts:31-45`). Consumer already ships: `client/src/lib/hooks/core.ts:123-130` calls `GET /repos/${repoId}/context` typed `SpecFile[]`, comment "safe to call once API exposes it". |
-| REQ-2 | `.md`/`.mdx` + allow-listed dir **segment** + `.devdigest/specs/`; excluded dirs never walked; escapes refused; over-cap listed-not-attachable | **clear — but the named reusable piece does not deliver it** | `REFERENCE_DOC_DIRS` exists (`intent/constants.ts:6`). `isSafeRepoPath` is **not exported** (`intent/references.ts:78`, plain `function`; spec cites `:58-66` — line drift), **prefix-matches** at `:88` which D-2a explicitly rejects, and is a **pure string check**. `EXCLUDED_DIRS` exists (`repo-intel/constants.ts:17-26`). Full analysis below. |
+| REQ-2 | `.md`/`.mdx` + allow-listed dir **segment** **or** under `.devdigest/specs/`; excluded dirs never walked; escapes refused; over-cap listed-not-attachable | **clear — and it states two predicates, not one** | `REFERENCE_DOC_DIRS` exists (`intent/constants.ts:6`). `isSafeRepoPath` is **not exported** (`intent/references.ts:78`, plain `function`; spec cites `:58-66` — line drift), **prefix-matches** at `:88` which D-2a explicitly rejects, and is a **pure string check**. `EXCLUDED_DIRS` exists (`repo-intel/constants.ts:17-26`) and contains no dot-directory, so `.devdigest/` is reached — `walk.ts:88-93` excludes by **name**, not by leading dot. **F2:** the requirement's "or it sits under `.devdigest/specs/`" is a *prefix* predicate and cannot live in a per-segment list. |
 | REQ-3 | Per-document token estimate; one counter feeds display, projection and enforcement | **clear** | `container.tokenizer` verified (`platform/container.ts:134-138`), `TiktokenTokenizer` + `approxTokens` fallback (`adapters/tokenizer/index.ts:25-40`). `tokens_exact` is **not derivable** — the `Tokenizer` interface is `{ count(text): number }` and the `broken` flag is private. Resolved by **R2: omit the field**. |
 | REQ-4 | Attach/detach to an agent, user-controlled order | **clear** | No attachment table in `server/src/db/schema/` — `context.ts` holds only `code_chunks`, `symbols`, `references`, `onboarding`. Ordered-link precedent: `agent_skills` (`db/schema/agents.ts:51-63`). |
 | REQ-5 | Same for skills | **clear** | Same evidence. |
@@ -94,6 +95,91 @@ AC-19 is **already structurally guaranteed at the `reviewer-core` layer**; the e
 
 ---
 
+---
+
+## Cross-review findings — resolutions
+
+Reviewed by `gemini-3.6-flash`, which saw the spec, the plan verbatim and the repository
+constraints, and **nothing** about how the plan was reached. Three findings; all three valid.
+
+### F1 — R1's two-nullable-FK design needs a NULL-aware uniqueness form
+
+**Confirmed.** In a standard Postgres unique index, `NULL` is distinct from `NULL`, so
+`(agent_id, skill_id, repo_id, path)` admits two identical agent attachments — both carrying
+`skill_id = NULL`. `db:generate` would succeed and the duplicate would land. This is the direct
+price of R1, which we accepted for cascade-delete, and it must be paid explicitly.
+
+**Chosen: two partial unique indexes.**
+
+```
+uniqueIndex('ctx_att_agent_repo_path_uq').on(agentId, repoId, path).where(sql`agent_id is not null`)
+uniqueIndex('ctx_att_skill_repo_path_uq').on(skillId, repoId, path).where(sql`skill_id is not null`)
+```
+
+**Why this and not `UNIQUE NULLS NOT DISTINCT`** — both are available and both are generatable,
+so the choice is on meaning rather than capability:
+
+- **It states the actual invariant.** The real rule is two rules: for an agent target
+  `(agent_id, repo_id, path)` is unique, and for a skill target `(skill_id, repo_id, path)` is
+  unique. A four-column `NULLS NOT DISTINCT` constraint gives the same result *only because* the
+  `num_nonnulls = 1` CHECK guarantees exactly one column is non-null — so correctness would
+  depend on a second constraint holding. Relax or drop that CHECK and the uniqueness rule
+  silently changes meaning. The partial indexes do not.
+- **Each index doubles as the lookup index for its target kind.** `resolveForAgent` queries by
+  `agent_id`; the agent partial index serves it directly.
+- **Weaker version requirement, at no cost.** `NULLS NOT DISTINCT` needs PG15+. We are on
+  **PG16** — verified in both places that matter, `docker-compose.yml:5` and
+  `server/test/helpers/pg.ts:36` — so it was genuinely available. Partial unique indexes work on
+  every version, and choosing them costs nothing.
+
+**Both forms are expressible in this toolchain, checked against the installed packages rather
+than documentation** (drizzle-orm 0.38.4, drizzle-kit 0.30.6): the index builder exposes
+`where(condition: SQL)` at `pg-core/indexes.d.ts:67`, and drizzle-kit's `bin.cjs` interpolates
+`${idx.where}` into its `CREATE INDEX` emitter. Note that `nullsNotDistinct()` lives on
+`pg-core/unique-constraint.d.ts:10` — the table **constraint** builder, **not** `uniqueIndex()`;
+reaching for it on the index builder is a typecheck error, and that mistake is easy to make from
+memory. **S3's no-hand-written-SQL rule holds for the chosen form.**
+
+**This changes S3's step content, stated explicitly:** the index list in S3's "Done when" is
+replaced, and S3 gains its own named test — it previously deferred to S8, which is not
+sufficient, because a constraint needs a test that tries to violate it. It does **not** change
+the track decomposition or the agent count; T1's file set gains one test file.
+
+### F2 — `.devdigest/specs` cannot live in a per-segment list
+
+**Mechanism confirmed, consequence corrected.** Putting `.devdigest/specs` into a list that S5
+compares *per path segment* means the entry can never match: no single segment equals
+`.devdigest/specs`. AC-4 nonetheless passes, because `REFERENCE_DOC_DIRS` contains `specs`
+(`intent/constants.ts:6`) and `.devdigest/specs/prd.md` matches on its own `specs` segment. The
+directory is reachable: `.devdigest` is not in `EXCLUDED_DIRS` (`repo-intel/constants.ts:17-26`),
+and `walk.ts:88-93` skips excluded **names**, never dot-directories as a class.
+
+So the defect is not a failing test — it is a **list entry that silently does nothing** while a
+reader reasonably believes it carries REQ-2's second predicate.
+
+**Chosen: state the two predicates separately and implement both.** Not "drop it as redundant",
+for a reason about coupling rather than tidiness: `REFERENCE_DOC_DIRS` is **owned by the `intent`
+module**, and we import it. If a future change there drops `specs`, `.devdigest/specs/` discovery
+would vanish silently and AC-4 would start failing for a reason with no obvious connection to
+this feature. REQ-2 names two predicates; the code carries two predicates. The entry becomes
+non-inert because **S5 gains a test for the prefix predicate in isolation** — one that fails if
+the prefix branch is removed, regardless of what `REFERENCE_DOC_DIRS` contains.
+
+### F3 — `clone_path` set but missing on disk
+
+**Confirmed, and the gap is precisely where the reviewer put it.** The copied walk tolerates a
+missing root: `walk.ts:79-86` catches `readdir` failure per directory, including the first call.
+But **S5's containment gate is new code outside that pattern** — a `realpath` of the clone root
+throws `ENOENT` when the directory is gone, and nothing in the original plan caught it. AC-2
+requires "an empty list with an explicit *not cloned* reason, not a 500"; a deleted clone must
+reach the same outcome with a reason that **distinguishes it from never-cloned**.
+
+Resolved with a three-value reason vocabulary on the module-local list envelope (S2), a single
+root resolution per request that classifies its own failure (S5), the empty-list-with-reason
+response (S8), copy for the new reason (S12, rendered in S15), and — because the same gate is
+shared — one clause in S10 so a run against a deleted clone skips every document and completes,
+per §6's "Every attached document fails" row, rather than throwing out of the containment call.
+
 ## Goal & scope
 
 Ship the `project-context` server module, the `/context` page with its Agents and Skills tabs, a read-only Context tab in the agent editor, and the run-time injection path — so markdown in a repo's allow-listed documentation directories can be discovered, attached to agents and skills, projected against an 8 000-token budget per agent, injected into review prompts as untrusted project context, and read back in the run trace. Done means AC-1 through AC-31 pass and an agent with attached documents demonstrably changes its prompt: REQ-11 and REQ-14 are what make this real rather than decorative.
@@ -137,6 +223,7 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - `INSIGHTS.md` writes are append-only — source: root `CLAUDE.md`.
 - **Precedence:** package `INSIGHTS.md` → package `CLAUDE.md` → root `CLAUDE.md` → skill → general practice.
 - **Never read or cite `server/clones/`** — a runtime self-clone of stale duplicates (also gitignored).
+- **Deployment target is Postgres 16**, pinned identically in `docker-compose.yml:5` and `server/test/helpers/pg.ts:36` (`pgvector/pgvector:pg16`). Relevant to F1.
 - **Do-not-touch entered:**
   - `server/src/vendor/shared/contracts/platform.ts` — **S1**, unavoidable: §10 requires extending `SpecFile`, and the shipped `useContextFiles` is already typed against it. Its own step, mirrored, `diff -rq`-verified.
   - `server/src/db/migrations/` — **S3**, unavoidable and **generated only**: `pnpm db:generate` writes `0014_*.sql`. No existing migration is edited; no SQL is hand-written.
@@ -147,8 +234,8 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 |---|---|---|
 | `useContextFiles` | `client/src/lib/hooks/core.ts:123-130` | Already calls `GET /repos/:id/context` typed `SpecFile[]`. S8 makes the route real; the hook is used **unchanged**. |
 | `SpecFile`, `IndexStatus` | `vendor/shared/contracts/platform.ts:259-274` | `SpecFile` extended in S1; `IndexStatus` untouched (D-7). |
-| `REFERENCE_DOC_DIRS` | `intent/constants.ts:6` | Imported by S4; `.devdigest/specs` added alongside, without editing intent's list. |
-| `EXCLUDED_DIRS` | `repo-intel/constants.ts:17-26` | Imported by S5's walk. |
+| `REFERENCE_DOC_DIRS` | `intent/constants.ts:6` | Imported by S4 as the **segment** allow-list. **F2:** `.devdigest/specs/` is a separate **prefix** predicate, not a list entry. |
+| `EXCLUDED_DIRS` | `repo-intel/constants.ts:17-26` | Imported by S5's walk. Contains no dot-directory, so `.devdigest/` is reachable. |
 | `walkClone` | `repo-intel/pipeline/walk.ts:73-122` | The pattern S5 copies: `withFileTypes`, symlink skip at `:89` (BQ-3/a), POSIX relpath at `:119`, `stat` size gate at `:106-115`, unreadable-dir catch at `:82-86`. |
 | `container.tokenizer` | `platform/container.ts:134-138` | The single counter for REQ-3/10/13; overridable via `ContainerOverrides.tokenizer` in tests. |
 | `wrapUntrusted` | `reviewer-core/src/prompt.ts:31`, re-exported at `server/src/platform/prompt.ts` | S7 calls it so projection blocks are byte-identical to the engine's. Alias in `tsconfig.json` **and** `vitest.config.ts` already. |
@@ -177,40 +264,40 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - **Depends on:** —
 - **Done when:** `tokens_estimate`, `over_cap`, `used_by_count` are `.nullish()` on `SpecFile` (**`tokens_exact` omitted per R2**); the barrel `vendor/shared/index.ts` is **not** edited (`platform.js` already exported at `:23`); the client file is a byte-identical mirror; and `diff -rq server/src/vendor/shared client/src/vendor/shared` prints nothing. All three fields optional ⇒ no existing fixture breaks.
 
-### S2 — Module-local contracts *(BQ-4/a)*
+### S2 — Module-local contracts *(BQ-4/a; amended by F3)*
 - **Files:** `server/src/modules/project-context/contract.ts` (new)
 - **Skill:** `zod`
 - **Test:** `server/test/project-context-contract.test.ts` — parse a live route response against each schema, the pattern `blast` uses to keep its copies honest
 - **Depends on:** S1
-- **Done when:** `ContextDocList`, `AttachmentInput`, `AttachmentRow`, `Projection`, `ProjectionEntry` are declared with the §10 field names (`origin`, `via_skill_id`, `outcome` ∈ `injected|dropped_budget|skipped`, `budget_tokens`, `projected_tokens`), with a header comment naming this file the source of truth and citing `blast/contract.ts:1-26` for why it is not shared.
+- **Done when:** `ContextDocList`, `AttachmentInput`, `AttachmentRow`, `Projection`, `ProjectionEntry` are declared with the §10 field names (`origin`, `via_skill_id`, `outcome` ∈ `injected|dropped_budget|skipped`, `budget_tokens`, `projected_tokens`), **`ContextDocList` carries `reason: 'not_cloned' | 'clone_missing' | null`** (F3 — three distinct outcomes, never conflated), plus `capped: boolean` and the clone's last-synced time (§6 Freshness); a header comment names this file the source of truth and cites `blast/contract.ts:1-26` for why it is not shared.
 
-### S3 — Attachment table + generated migration *(protected zone, R1)*
+### S3 — Attachment table + generated migration *(protected zone; R1; amended by F1)*
 - **Files:** `server/src/db/schema/context.ts` (append `contextAttachments`), `server/src/db/migrations/0014_*.sql` (**generated**)
 - **Skill:** `postgresql-table-design`, `drizzle-orm-patterns`
-- **Test:** covered by S8's integration tests (AC-9, AC-13)
+- **Test:** **`server/test/project-context-schema.it.test.ts` (new)** — insert the same agent attachment twice and expect the second to **fail** on the partial unique index; the same for a skill attachment; and a `num_nonnulls` violation (both FKs set, and neither set) rejected. **F1: a constraint needs a test that tries to violate it — deferring to S8 was not sufficient.**
 - **Depends on:** S2
-- **Done when:** columns are `id`, `workspace_id`, `repo_id`, **`agent_id` and `skill_id` both nullable FKs (R1)**, `path`, `order`, `created_at`; a `CHECK (num_nonnulls(agent_id, skill_id) = 1)` constraint; every FK `ON DELETE CASCADE` so §7's lifecycle holds; a unique index over `(agent_id, skill_id, repo_id, path)`; a lookup index on `(workspace_id, repo_id)`; and `pnpm db:generate` then `pnpm db:migrate` succeed **with no hand-edited SQL**. `target_kind`/`target_id` remain the wire shape (§10), mapped at the repository boundary.
+- **Done when:** columns are `id`, `workspace_id`, `repo_id`, **`agent_id` and `skill_id` both nullable FKs (R1)**, `path`, `order`, `created_at`; a `CHECK (num_nonnulls(agent_id, skill_id) = 1)` constraint; every FK `ON DELETE CASCADE` so §7's lifecycle holds; **two partial unique indexes — `ctx_att_agent_repo_path_uq` on `(agent_id, repo_id, path) WHERE agent_id IS NOT NULL` and `ctx_att_skill_repo_path_uq` on `(skill_id, repo_id, path) WHERE skill_id IS NOT NULL` (F1)** — declared with drizzle's `uniqueIndex(...).on(...).where(sql`…`)` (`pg-core/indexes.d.ts:67`), **not** a four-column unique index, which Postgres would treat as satisfied by two rows that both have `skill_id = NULL`; a lookup index on `(workspace_id, repo_id)`; and `pnpm db:generate` then `pnpm db:migrate` succeed **with no hand-edited SQL** — verified achievable, drizzle-kit 0.30.6 emits the `WHERE` clause. `target_kind`/`target_id` remain the wire shape (§10), mapped at the repository boundary.
 
-### S4 — Module constants
+### S4 — Module constants *(amended by F2)*
 - **Files:** `server/src/modules/project-context/constants.ts` (new)
 - **Skill:** —
 - **Test:** none — no behaviour change
 - **Depends on:** —
-- **Done when:** `CONTEXT_DOC_DIRS` (imported `REFERENCE_DOC_DIRS` + `.devdigest/specs`), `MD_EXTENSIONS`, `MAX_DOC_BYTES = 64 * 1024`, `MAX_LISTED_DOCS = 500`, `MAX_ATTACHMENTS_PER_TARGET = 20`, `PROJECT_CONTEXT_TOKEN_BUDGET = 8_000` are exported, each carrying its §7 rationale in a comment (the 64 KB cap cites `skills/import.ts:33-34`; the 8 000 cites D-4's "held separately from the skills budget").
+- **Done when:** **two allow-list constants with distinct matching semantics are exported, named so the semantics cannot be confused (F2):** `CONTEXT_DOC_DIR_SEGMENTS` = `REFERENCE_DOC_DIRS` (matched **per path segment**, D-2a) and `CONTEXT_DOC_PATH_PREFIXES` = `['.devdigest/specs/']` (matched as a **leading path prefix**, REQ-2's second predicate). **`.devdigest/specs` must not appear in the segment list — a two-segment string can never match a per-segment comparison, and a list entry that silently does nothing is worse than no entry.** Also exported: `MD_EXTENSIONS`, `MAX_DOC_BYTES = 64 * 1024`, `MAX_LISTED_DOCS = 500`, `MAX_ATTACHMENTS_PER_TARGET = 20`, `PROJECT_CONTEXT_TOKEN_BUDGET = 8_000` are exported, each carrying its §7 rationale in a comment (the 64 KB cap cites `skills/import.ts:33-34`; the 8 000 cites D-4's "held separately from the skills budget"). Each constant carries a comment naming **which** predicate it feeds.
 
-### S5 — Discovery walk and the containment gate *(the REQ-2 security step, BQ-3/a)*
+### S5 — Discovery walk and the containment gate *(the REQ-2 security step; BQ-3/a; amended by F2 and F3)*
 - **Files:** `server/src/modules/project-context/discovery.ts` (new)
 - **Skill:** `security` (guardrail while writing), `typescript-expert`
-- **Test:** `server/test/project-context-discovery.test.ts` — AC-3 (root `README.md`, `src/notes.md`, `node_modules/pkg/docs/x.md` all absent — **built in a temp dir, because `node_modules/` is gitignored at `.gitignore:1` and cannot be a committed fixture**), AC-4 (`.devdigest/specs/prd.md` present), AC-5 (`../../../etc/passwd`, absolute, null byte, Windows drive all rejected), AC-7 (positive integer estimate, stable across repeat calls), a **symlink-escape case** (`docs/x -> /etc` yields nothing and reads nothing), and a **non-leading-segment case** proving `server/docs/b.md` is found where a prefix match would miss it (D-2a)
+- **Test:** `server/test/project-context-discovery.test.ts` — AC-3 (root `README.md`, `src/notes.md`, `node_modules/pkg/docs/x.md` all absent — **built in a temp dir, because `node_modules/` is gitignored at `.gitignore:1` and cannot be a committed fixture**), AC-4 (`.devdigest/specs/prd.md` present), **a prefix-predicate test in isolation (F2): `.devdigest/specs/prd.md` is discovered with the segment list stubbed to exclude `specs`, so the test fails if the prefix branch is removed** — this is what makes the entry non-inert and decouples the guarantee from another module's list, AC-5 (`../../../etc/passwd`, absolute, null byte, Windows drive all rejected), AC-7 (positive integer estimate, stable across repeat calls), a **symlink-escape case** (`docs/x -> /etc` yields nothing and reads nothing), a **non-leading-segment case** proving `server/docs/b.md` is found where a prefix match would miss it (D-2a), and **a missing-clone-root case (F3): a `clone_path` pointing at a deleted directory yields an empty list with the `clone_missing` reason and never throws**
 - **Depends on:** S4
-- **Done when:** the walk skips `EXCLUDED_DIRS` and **skips symlinks entirely** (BQ-3/a, `walk.ts:89` verbatim), matches `.md`/`.mdx` on **any** path segment against `CONTEXT_DOC_DIRS`, marks `over_cap` above `MAX_DOC_BYTES` without excluding the row, caps at `MAX_LISTED_DOCS` with a flag, tolerates unreadable directories the way `walk.ts:82-86` does; and `safeDocPath()` performs the string checks **and** a `realpath` containment check against the clone root, and is called at the last gate before **every** read — not only at attach time.
+- **Done when:** the walk skips `EXCLUDED_DIRS` and **skips symlinks entirely** (BQ-3/a, `walk.ts:89` verbatim), matches `.md`/`.mdx` when **either** predicate holds — `hasAllowedSegment(rel) || hasAllowedPrefix(rel)` — with **both implemented, per F2's chosen resolution**; marks `over_cap` above `MAX_DOC_BYTES` without excluding the row, caps at `MAX_LISTED_DOCS` with a flag, tolerates unreadable directories the way `walk.ts:82-86` does; and `safeDocPath()` performs the string checks **and** a `realpath` containment check against the clone root, and is called at the last gate before **every** read — not only at attach time; and **the clone root is resolved once per request through a helper that classifies its own failure (F3): `ENOENT` ⇒ return the `clone_missing` outcome rather than throwing, any other error (e.g. `EACCES`) ⇒ propagate to the existing error handling so §6's "Clone unreadable" copy still applies. A `realpath` that throws must never surface as a 500.**
 
 ### S6 — Repository and service
 - **Files:** `server/src/modules/project-context/repository.ts`, `service.ts` (new)
 - **Skill:** `drizzle-orm-patterns`
-- **Test:** covered by S8 (AC-9, AC-13, AC-16, AC-30)
+- **Test:** covered by S8 (AC-9, AC-13, AC-16, AC-30) and S3 (constraint behaviour)
 - **Depends on:** S3, S5
-- **Done when:** attachment CRUD is workspace-scoped **in SQL**; `resolveForAgent(agentId)` returns direct attachments then per-skill attachments ordered by `agent_skills.order` then attachment `order`, filtering `skills.enabled = true` **inside the query** (mirroring `skill.repo.ts:17-26` so no caller can forget); `usageCounts()` returns per-document and per-skill counts (REQ-9); `MAX_ATTACHMENTS_PER_TARGET` is enforced on attach; over-cap documents are refused at attach (AC-6).
+- **Done when:** attachment CRUD is workspace-scoped **in SQL**; `resolveForAgent(agentId)` returns direct attachments then per-skill attachments ordered by `agent_skills.order` then attachment `order`, filtering `skills.enabled = true` **inside the query** (mirroring `skill.repo.ts:17-26` so no caller can forget); `usageCounts()` returns per-document and per-skill counts (REQ-9); `MAX_ATTACHMENTS_PER_TARGET` is enforced on attach; over-cap documents are refused at attach (AC-6); **a duplicate attach returns a clean domain error rather than surfacing the raw unique-violation** (F1's index is the backstop, not the UX).
 
 ### S7 — The shared assemble module *(BQ-1/a — carries AC-19, AC-22, AC-26, AC-27)*
 - **Files:** `server/src/modules/project-context/assemble.ts` (new)
@@ -219,12 +306,12 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - **Depends on:** S4, S5
 - **Done when:** one exported function takes ordered resolved documents plus `container.tokenizer` and returns `{ entries, texts, sectionText, sectionTokens, skipped, dropped }`; it calls `wrapUntrusted` imported from `@devdigest/reviewer-core` so blocks are byte-identical to the engine's; **`sectionTokens` counts the `## Project context` heading plus the joined blocks** (BQ-1/a); empty and whitespace-only documents are filtered **inside** it so `texts` can never contain `''`; `texts` is `[]` when nothing survives; skip and drop reasons name a path and a cause and **never content** (§7). This one function is called by both S8's projection route and S10's run path — that shared call is what makes AC-26 and AC-27 true.
 
-### S8 — Routes
+### S8 — Routes *(amended by F3)*
 - **Files:** `server/src/modules/project-context/routes.ts` (new)
 - **Skill:** `fastify-best-practices`, `zod`, `security`
-- **Test:** `server/test/project-context.it.test.ts` — AC-1, AC-2 (null `clone_path` ⇒ empty list with a "not cloned" reason, **not a 500**), AC-5 (422 envelope), AC-6, AC-9, AC-13 (cross-workspace ⇒ **404, never 403**), AC-17 (server half), AC-27, AC-30 (server half), AC-31
+- **Test:** `server/test/project-context.it.test.ts` — AC-1, AC-2 (null `clone_path` ⇒ empty list + `not_cloned`, **not a 500**), **a missing-clone-directory case (F3): `clone_path` set but the directory deleted ⇒ empty list + `clone_missing`, distinct from `not_cloned`, and not a 500**, AC-5 (422 envelope), AC-6, AC-9, AC-13 (cross-workspace ⇒ **404, never 403**), AC-17 (server half), AC-27, AC-30 (server half), AC-31
 - **Depends on:** S2, S6, S7
-- **Done when:** the module default-exports an async Fastify plugin using `withTypeProvider<ZodTypeProvider>()`; `GET /repos/:id/context` matches the shipped hook's URL **exactly**; attach/detach/reorder routes exist for agent and skill targets; `GET /agents/:id/context/projection` returns the §10 projection computed via S7; every handler calls `getContext(app.container, req)` and throws `NotFoundError` for another workspace's row; no `response:` schema is declared, matching every other route in this server.
+- **Done when:** the module default-exports an async Fastify plugin using `withTypeProvider<ZodTypeProvider>()`; `GET /repos/:id/context` matches the shipped hook's URL **exactly**; attach/detach/reorder routes exist for agent and skill targets; `GET /agents/:id/context/projection` returns the §10 projection computed via S7; every handler calls `getContext(app.container, req)` and throws `NotFoundError` for another workspace's row; **all three list outcomes are distinguishable by the client — documents present, `not_cloned`, `clone_missing` — and none of the three is a 5xx (F3)**; no `response:` schema is declared, matching every other route in this server.
 
 ### S9 — Registry
 - **Files:** `server/src/modules/index.ts` (+1 import, +1 entry)
@@ -233,12 +320,12 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - **Depends on:** S8
 - **Done when:** `projectContext` is imported with a `.js` extension and added to the `modules` record, and the app boots.
 
-### S10 — Run injection, trace population, `sectionTokens` recording *(BQ-1/a, R4 — carries AC-19, REQ-11, REQ-14)*
+### S10 — Run injection, trace population, `sectionTokens` recording *(BQ-1/a; R4; amended by F3 — carries AC-19, REQ-11, REQ-14)*
 - **Files:** `server/src/modules/reviews/run-executor.ts` (inside `runOneAgent`; the `reviewPullRequest` call at `:267-296`; `specs_read` at `:382`)
 - **Skill:** `typescript-expert`, `security`
-- **Test:** extend `server/test/reviews.it.test.ts` — AC-18, AC-11, AC-12, AC-20, AC-21 (cross-repo document skipped and **no same-named file from the repo under review is read**), AC-22, AC-23, AC-26, AC-27, AC-31; a unit test for **AC-19** (zero-attachment agent ⇒ prompt byte-identical to the pre-feature baseline); and **R4** — extend `server/test/prompt-log.test.ts` with a planted-secret fixture in a **skip reason** string
+- **Test:** extend `server/test/reviews.it.test.ts` — AC-18, AC-11, AC-12, AC-20, AC-21 (cross-repo document skipped and **no same-named file from the repo under review is read**), AC-22, AC-23, AC-26, AC-27, AC-31; a unit test for **AC-19** (zero-attachment agent ⇒ prompt byte-identical to the pre-feature baseline); **an every-document-fails case (F3): the clone directory deleted ⇒ the run completes with no project-context section and records all skips, per §6**; and **R4** — extend `server/test/prompt-log.test.ts` with a planted-secret fixture in a **skip reason** string
 - **Depends on:** S7, S9
-- **Done when:** resolution happens inside `runOneAgent` in a try/catch mirroring the skills lookup ("continuing without them"); `specs` is passed as `...(texts.length > 0 ? { specs: texts } : {})`; **the run emits `sectionTokens` on a run-log line** (BQ-1/a) so AC-26 has a recorded value to assert against; `specs_read` at `:382` carries every attachment — injected ones as a bare path, skipped and dropped ones as path + reason; one run-log line per skip or drop; **no document text reaches any log line**; and `buildPartialTrace`'s `specs_read: []` at `:557` is left as-is (assumption A2).
+- **Done when:** resolution happens inside `runOneAgent` in a try/catch mirroring the skills lookup ("continuing without them"); **the containment helper's classified failure is treated as "every document skipped", so a deleted clone yields skips and a completed run rather than an exception escaping into the catch as an opaque failure (F3)**; `specs` is passed as `...(texts.length > 0 ? { specs: texts } : {})`; **the run emits `sectionTokens` on a run-log line** (BQ-1/a) so AC-26 has a recorded value to assert against; `specs_read` at `:382` carries every attachment — injected ones as a bare path, skipped and dropped ones as path + reason; one run-log line per skip or drop; **no document text reaches any log line**; and `buildPartialTrace`'s `specs_read: []` at `:557` is left as-is (assumption A2).
 - **Test-mechanics note:** use `waitForTrace(app, runId)` from `test/helpers/runs.ts`, never `waitForPrRuns` alone, when asserting on `prompt_assembly` (`server/INSIGHTS.md` 2026-08-17).
 
 ### S11 — Client hooks
@@ -246,14 +333,14 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - **Skill:** `react-best-practices`
 - **Test:** covered by S14/S15/S16
 - **Depends on:** S8
-- **Done when:** attachment and projection hooks exist over `client/src/lib/api.ts`, with envelope types declared **locally** per BQ-4/(a) (the `hooks/blast.ts` precedent); `useContextFiles` in `core.ts` is used **unchanged**; `useReindexContext` is left untouched and unwired (**R5 note**); mutation failure surfaces and reverts the toggle rather than optimistically succeeding (§9).
+- **Done when:** attachment and projection hooks exist over `client/src/lib/api.ts`, with envelope types declared **locally** per BQ-4/(a) (the `hooks/blast.ts` precedent), **including the three-value `reason` (F3)**; `useContextFiles` in `core.ts` is used **unchanged**; `useReindexContext` is left untouched and unwired (**R5 note**); mutation failure surfaces and reverts the toggle rather than optimistically succeeding (§9).
 
-### S12 — i18n
+### S12 — i18n *(amended by F3)*
 - **Files:** `client/messages/en/context.json`, `client/messages/en/agents.json` (+`editor.tabs.context`)
 - **Skill:** —
 - **Test:** covered by S14/S15/S16
 - **Depends on:** —
-- **Done when:** `empty.body` is rewritten for the per-target model and names the allow-listed directories (**D-1 makes this copy change part of this spec** — the shipped text states the opposite model, "Every agent and the PR brief read them"); new keys exist for the tokens total (**superseding, not reusing, `chunks`** — D-7), both tab labels, the estimate marker, the budget fraction, origin and outcome words, the no-agent-in-view copy, the skill contribution figure, and the capped-list notice; `agents.json` gains `editor.tabs.context`; the superseded keys are left in place, unused.
+- **Done when:** `empty.body` is rewritten for the per-target model and names the allow-listed directories (**D-1 makes this copy change part of this spec** — the shipped text states the opposite model, "Every agent and the PR brief read them"); new keys exist for the tokens total (**superseding, not reusing, `chunks`** — D-7), both tab labels, the estimate marker, the budget fraction, origin and outcome words, the no-agent-in-view copy, the skill contribution figure, the capped-list notice, **and two distinct reason strings — one for "repository not cloned yet" and one for "the clone is missing on disk", which must not share copy (F3)**; `agents.json` gains `editor.tabs.context`; the superseded keys are left in place, unused.
 
 ### S13 — Sidebar nav item
 - **Files:** `client/src/vendor/ui/nav.ts` (+1 item)
@@ -269,12 +356,12 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - **Depends on:** S11, S12
 - **Done when:** it is a **pure render of the server's projection payload** — it computes no totals; it lives in `client/src/components/` because both `/context` and the agent editor consume it (`client/INSIGHTS.md` 2026-06-14); `origin` and `outcome` render as **words** via `Badge` + a local `*_META`, never colour alone (§6); numbers carry `.tnum`; and it degrades per §9 — on a missing projection it says so rather than summing rows.
 
-### S15 — The `/context` page
+### S15 — The `/context` page *(amended by F3)*
 - **Files:** `client/src/app/context/page.tsx` (new, thin route entry per `conventions/page.tsx`), `client/src/app/context/_components/ProjectContextView/{ProjectContextView.tsx,index.ts,styles.ts,constants.ts,ProjectContextView.test.tsx}`, plus `_components/DocumentList/`, `_components/AgentsTab/`, `_components/SkillsTab/`
 - **Skill:** `next-best-practices`, `react-best-practices`, `react-testing-library` (**`fireEvent` override**)
-- **Test:** colocated — AC-8 (estimate marker present, no copy claims exactness), AC-15 (empty state, not a blank list), AC-16 (usage count reads 2), AC-29 (skill contribution shown with no fraction and no drop marking)
+- **Test:** colocated — AC-8 (estimate marker present, no copy claims exactness), AC-15 (empty state, not a blank list), AC-16 (usage count reads 2), AC-29 (skill contribution shown with no fraction and no drop marking), **plus both empty-with-reason states rendering distinct copy (F3)**
 - **Depends on:** S13, S14
-- **Done when:** the page reads the repo from `useActiveRepo` and prompts to select one when absent (§6); the document list, both tabs and `ProjectionSummary` render; `styles.ts` + CSS custom properties, **no Tailwind**; long paths middle-truncate with the full value in an `srOnly` span per `WhyRiskCard`'s `FileRef`; the clone's last-synced time is surfaced and the page adds **no refresh affordance of its own** (D-7/§6 Freshness); no test imports `userEvent`.
+- **Done when:** the page reads the repo from `useActiveRepo` and prompts to select one when absent (§6); the document list, both tabs and `ProjectionSummary` render; **`not_cloned` and `clone_missing` render as distinct, non-error empty states — a deleted clone is not an error toast (F3)**; `styles.ts` + CSS custom properties, **no Tailwind**; long paths middle-truncate with the full value in an `srOnly` span per `WhyRiskCard`'s `FileRef`; the clone's last-synced time is surfaced and the page adds **no refresh affordance of its own** (D-7/§6 Freshness); no test imports `userEvent`.
 
 ### S16 — `AgentEditor` Context tab *(BQ-2/b)*
 - **Files:** `client/src/app/agents/[id]/_components/AgentEditor/constants.ts` (+1 `TABS` entry), `AgentEditor.tsx` (**tab dispatch**), `_components/ContextTab/{ContextTab.tsx,index.ts,styles.ts}` (new), extend `AgentEditor.test.tsx`
@@ -302,7 +389,7 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 - **Skill:** `engineering-insights`
 - **Test:** none
 - **Depends on:** S18
-- **Done when:** genuinely non-duplicate, file-grounded findings are appended. Candidates: the `realpath` gap at `simple-git.ts:142-143`; `isSafeRepoPath` being private and prefix-matching where D-2a needs segment matching; the heading-vs-`assembly.specs` boundary settled by BQ-1; `seed.ts:96`'s null `clone_path` as an e2e constraint; and the gitignored-fixture constraint on `node_modules/` test cases. Re-read both files first; write nothing if nothing is substantial.
+- **Done when:** genuinely non-duplicate, file-grounded findings are appended. Candidates: the `realpath` gap at `simple-git.ts:142-143`; `isSafeRepoPath` being private and prefix-matching where D-2a needs segment matching; the heading-vs-`assembly.specs` boundary settled by BQ-1; `seed.ts:96`'s null `clone_path` as an e2e constraint; the gitignored-fixture constraint on `node_modules/` test cases; **and the F1 pairing — a nullable-FK polymorphic target needs partial unique indexes, because a plain unique index treats `NULL` as distinct and admits duplicates**. Re-read both files first; write nothing if nothing is substantial.
 
 ---
 
@@ -329,7 +416,7 @@ Ship the `project-context` server module, the `/context` page with its Agents an
 | `server/` | `pnpm typecheck` | must pass | implementer (per track), plan-verifier |
 | `server/` | `pnpm exec vitest related <changed files>` | fast feedback on own diff | implementer (during) |
 | `server/` | `pnpm exec vitest run --exclude '**/*.it.test.ts'` | unit; must pass | implementer (end of track) |
-| `server/` | `pnpm exec vitest run .it.test` | integration, real Postgres via testcontainers | plan-verifier |
+| `server/` | `pnpm exec vitest run .it.test` | integration, real Postgres via testcontainers — **now includes the S3 constraint test** | plan-verifier |
 | `server/` | `pnpm db:generate && pnpm db:migrate` | migration applies cleanly | implementer (S3 only) |
 | `client/` | `pnpm typecheck` | must pass — client tests **are** typechecked | implementer, plan-verifier |
 | `client/` | `pnpm test` | vitest + jsdom, colocated | implementer (end of track), plan-verifier |
@@ -344,7 +431,7 @@ No lint row: there is no ESLint, Biome or Prettier config and no `lint` script i
 **Permission prompts to expect.** `.claude/settings.local.json` allows only three git commands, and the single project hook guards writes under `specs/` only — so the executing agents will be prompted for `pnpm install`, `pnpm typecheck`, `pnpm test`, `pnpm exec vitest`, `pnpm db:generate`, `pnpm db:migrate`, `npm ci`, and `docker compose`. Approve them up front rather than letting a track stall mid-run.
 
 **Two environment traps, both recorded and both cheap to hit.**
-1. Integration tests need Docker, and `dockerAvailable()` disagrees with testcontainers about "reachable": under OrbStack the suites **fail** rather than skip, reporting 7 failed files and 38 skipped tests — easy to misread as success. Export `DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock` (`server/INSIGHTS.md` 2026-08-20).
+1. Integration tests need Docker, and `dockerAvailable()` disagrees with testcontainers about "reachable": under OrbStack the suites **fail** rather than skip, reporting 7 failed files and 38 skipped tests — easy to misread as success. Export `DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock` (`server/INSIGHTS.md` 2026-08-20). **S3's new constraint test is an `.it.test`, so it is subject to this.**
 2. On a fresh clone `pnpm install` exits 1 on `ERR_PNPM_IGNORED_BUILDS`; set the `allowBuilds:` placeholders in the generated `pnpm-workspace.yaml` files to `true` (`server/INSIGHTS.md` 2026-08-02).
 
 **One assertion trap that will bite S10.** `JSON.stringify(llm.calls)` escapes quotes, so `.toContain('<untrusted source="spec-0">')` can never match — it is stored as `source=\"spec-0\"`, and the failure reads like a missing prompt section rather than a broken assertion. Assert against `trace.prompt_assembly.user` or the raw rendered content (`server/INSIGHTS.md` 2026-08-28).
@@ -354,14 +441,14 @@ No lint row: there is no ESLint, Biome or Prettier config and no `lint` script i
 | AC | From spec | Verified by | Covered by step |
 |---|---|---|---|
 | AC-1 | REQ-1 | integration | S8 (with S5) |
-| AC-2 | REQ-1 | integration | S8 |
+| AC-2 | REQ-1 | integration | S8 (`not_cloned`; `clone_missing` is its F3 sibling case) |
 | AC-3 | REQ-2 | unit | S5 (temp dir — `node_modules/` is gitignored) |
-| AC-4 | REQ-2 | unit | S5 |
+| AC-4 | REQ-2 | unit | S5 (both predicates, incl. the isolated prefix test) |
 | AC-5 | REQ-2 | unit | S5 (rejection) + S8 (422 envelope) |
 | AC-6 | REQ-2 | integration | S5 + S6 + S8 |
 | AC-7 | REQ-3 | unit | S5 |
 | AC-8 | REQ-3 | unit (client) | S15 |
-| AC-9 | REQ-4, REQ-5 | integration | S8 (with S6) |
+| AC-9 | REQ-4, REQ-5 | integration | S8 (with S6); duplicate rejection in S3 |
 | AC-10 | REQ-4 | integration | S7 + S10 |
 | AC-11 | REQ-6 | integration | S10 (with S6) |
 | AC-12 | REQ-6 | integration | S10 (with S6) |
@@ -402,7 +489,7 @@ S1 → `diff -rq` → S2 → S3 → `db:generate && db:migrate` → S4 → S5 �
 | Track | Steps | Agent | Model | File set | Starts after | Brief |
 |---|---|---|---|---|---|---|
 | **T0 Contract** | S1, S2 | `implementer` | **opus** | `server/src/vendor/shared/contracts/platform.ts`, `client/src/vendor/shared/contracts/platform.ts`, `server/src/modules/project-context/contract.ts`, `server/test/contracts.test.ts`, `server/test/project-context-contract.test.ts` | — | Add three optional fields to `SpecFile` (**no `tokens_exact`**), mirror byte-identically to the client copy, prove `diff -rq` prints nothing. Declare the module-local `Attachment`/`Projection` schemas. You are in a do-not-touch zone: do not edit the barrel, do not touch any other contract file. **Opus** — a wrong shape here propagates into every other track. |
-| **T1 DB** | S3 | `implementer` | **opus** | `server/src/db/schema/context.ts`, `server/src/db/migrations/0014_*.sql` (generated) | T0 | Append the attachment table with R1's two nullable FKs and the `num_nonnulls = 1` check, then `db:generate` → `db:migrate`. Never hand-write SQL; never edit an existing migration. Serial and indivisible. **Opus** — tenancy and cascade semantics live here. |
+| **T1 DB** | S3 | `implementer` | **opus** | `server/src/db/schema/context.ts`, `server/src/db/migrations/0014_*.sql` (generated), **`server/test/project-context-schema.it.test.ts`** | T0 | Append the table with R1's two nullable FKs and the `num_nonnulls = 1` check, **and two partial unique indexes — not a four-column unique index, which Postgres would satisfy with two rows both carrying `skill_id = NULL`**. Then `db:generate` → `db:migrate`. Write the constraint test that inserts a duplicate and expects failure. Never hand-write SQL; never edit an existing migration. **Opus** — tenancy, cascade and uniqueness semantics live here. |
 | **T2 Server core** | S4–S10 | `implementer` | **opus** | `server/src/modules/project-context/**`, `server/src/modules/index.ts`, `server/src/modules/reviews/run-executor.ts`, `server/test/project-context-*.test.ts`, `server/test/project-context.it.test.ts`, `server/test/reviews.it.test.ts`, `server/test/prompt-log.test.ts`, `server/test/routes-smoke.test.ts` | T1 | Discovery with symlink-skip + `realpath` containment, the shared assemble module with `sectionTokens`, repository/service, routes, registry, run injection and the `sectionTokens` log line. **Deliberately one track:** `assemble.ts` is called by both the projection route and `run-executor`, and AC-26/AC-27 assert those two agree *exactly* — splitting them across agents makes the single guarantee this feature sells the most likely thing to break. **Opus** throughout: security gate, tenancy, budget arithmetic, AC-19. |
 | **T3 Client foundation** | S11, S12, S13, S14 | `implementer` | **sonnet** | `client/src/lib/hooks/project-context.ts`, `client/src/lib/hooks/index.ts`, `client/messages/en/context.json`, `client/messages/en/agents.json`, `client/src/vendor/ui/nav.ts`, `client/src/components/ProjectionSummary/**` | T0 | Hooks over `lib/api.ts` with locally-declared envelopes, i18n (rewrite `empty.body`; leave superseded keys), one nav entry, and the cross-route `ProjectionSummary` — a **pure render of the server payload that computes no totals**. Do not touch `core.ts`. `styles.ts` not Tailwind; `.tnum` on numbers; `Badge` + local `*_META` for origin/outcome as words; `fireEvent` never `userEvent`. **Sonnet** — no decision propagates from here; every number arrives from the server. Runs in `client/` concurrently with T1/T2 in `server/`. |
 | **T4 Client UI** | S15, S16 | `implementer` | **sonnet** | `client/src/app/context/**`, `client/src/app/agents/[id]/_components/AgentEditor/{constants.ts,AgentEditor.tsx}`, `.../AgentEditor/_components/ContextTab/**`, `.../AgentEditor/AgentEditor.test.tsx` | T2, T3 | Build the `/context` page and the read-only `AgentEditor` Context tab, both consuming `ProjectionSummary` from T3 and the S8 projection endpoint. **`AgentEditor.tsx:24`'s two-way ternary must become a map or switch** before adding a third tab. `useActiveRepo` for the repo; no refresh affordance (D-7). `fireEvent` never `userEvent`. **Sonnet** — the hard arithmetic is server-side. |
@@ -415,7 +502,7 @@ S1 → `diff -rq` → S2 → S3 → `db:generate && db:migrate` → S4 → S5 �
 
 **Barriers:**
 1. **Contract barrier (T0).** `server/src/vendor/shared/` plus its client mirror must land and `diff -rq` must print nothing before T1, T2 or T3 start. Global, non-negotiable.
-2. **DB barrier (T1).** Schema edit → `db:generate` → `db:migrate` is one indivisible serial unit. T2 cannot start until the migration is applied — its integration tests need the table.
+2. **DB barrier (T1).** Schema edit → `db:generate` → `db:migrate` is one indivisible serial unit. T2 cannot start until the migration is applied, **and its constraint test must pass before T2 builds on the table**.
 3. **Registry line.** `server/src/modules/index.ts` belongs to **T2 exclusively**. No other track touches it.
 4. **`run-executor.ts`** belongs to **T2 exclusively** — the shared studio+CI path and the AC-19 carrier.
 5. **`server/src/db/seed.ts`** belongs to **T6 exclusively**, and T6 runs when no other server track is live.
@@ -431,13 +518,16 @@ S1 → `diff -rq` → S2 → S3 → `db:generate && db:migrate` → S4 → S5 �
 | Mode | Agent invocations | Model tiers | What dominates the cost |
 |---|---|---|---|
 | single-agent | **5** — 1 `implementer` (S1–S19) + 1 `plan-verifier` + 1 `architecture-reviewer` + 2 budgeted fix rounds | opus throughout (one agent inherits the session model) | One long opus session carrying 19 steps across three packages, re-reading both `CLAUDE.md` files and all four `INSIGHTS.md`. Wall-clock, not invocation count, is the real cost. |
-| **multi-agent (chosen)** | **11** — 7 `implementer` tracks (T0–T6) + 1 `plan-verifier` + 1 `architecture-reviewer` + 2 budgeted fix rounds | **3 opus** (T0, T1, T2) + **4 sonnet** (T3–T6) + 2 opus reviewers | **T2 dominates** — seven steps of opus work and roughly two-thirds of the diff. The four sonnet tracks are cheap; the saving comes from not running them on opus and from T3 overlapping T1/T2 across package boundaries. Per-track briefs rather than the full plan are what keep 7 invocations from costing more than the tests do. |
+| **multi-agent (chosen)** | **11 — unchanged by the cross-review amendments** — 7 `implementer` tracks (T0–T6) + 1 `plan-verifier` + 1 `architecture-reviewer` + 2 budgeted fix rounds | **3 opus** (T0, T1, T2) + **4 sonnet** (T3–T6) + 2 opus reviewers | **T2 dominates** — seven steps of opus work and roughly two-thirds of the diff. The four sonnet tracks are cheap; the saving comes from not running them on opus and from T3 overlapping T1/T2 across package boundaries. Per-track briefs rather than the full plan are what keep 7 invocations from costing more than the tests do. |
 
-**Counted, not estimated:** 19 steps → 7 implementer tracks, + 2 reviewers, + 2 fix rounds = **11**. Set `--max-agents` at 11 or above. The BQ-2/(b) client work did **not** raise the track count, because S16 was merged into T4 rather than given its own track. If a lower ceiling is forced, the smallest honest collapse merges T5 into T4, giving **10**; below that, merge T3 into T4 for **9**, at the cost of serialising the only cross-package overlap in the plan.
+**Counted, not estimated:** 19 steps → 7 implementer tracks, + 2 reviewers, + 2 fix rounds = **11**. Set `--max-agents` at 11 or above. The BQ-2/(b) client work did **not** raise the track count, because S16 was merged into T4 rather than given its own track. **The three cross-review amendments add one test file to T1's file set and clauses to five existing steps; no step moved tracks, no track was added, and the agent count is unchanged.** If a lower ceiling is forced, the smallest honest collapse merges T5 into T4, giving **10**; below that, merge T3 into T4 for **9**, at the cost of serialising the only cross-package overlap in the plan.
 
 ## Risks & open questions
 
 - **The skill half of the reviewer's feedback is deliberately not built.** The course reviewer's returned feedback named "no Context tab in the agent **and skill** editors". BQ-2/(b) builds the **agent** half only. The skill half was considered and left out because `SkillEditor` (`client/src/app/skills/[id]/_components/SkillEditor/SkillEditor.tsx`) has **no tab bar at all** — it is a single component, so a Context tab there means first designing and building a tab shell for that screen, which is its own change with its own review surface. The spec supports this reading: REQ-8 puts both tabs on `/context`, and §14's open question is phrased about the **agent** editor only ("Should an agent's own editor show its attached documents read-only?"). **That §14 question is now answered for agents and remains open for skills.** This is a decision, not an oversight; a reader or reviewer finding no skill-editor Context tab should find this paragraph rather than infer a miss.
+- **F1 residual — the CHECK and the indexes are now two halves of one rule.** The partial indexes make uniqueness independent of `num_nonnulls`, which is why they were chosen; but a future change that adds a third target kind must add a third partial index, and nothing in the schema will remind anyone. S19 records this pairing in `server/INSIGHTS.md` for exactly that reason.
+- **F2 residual — we import another module's list.** `CONTEXT_DOC_DIR_SEGMENTS` is `REFERENCE_DOC_DIRS`, owned by `intent`. Implementing both predicates means `.devdigest/specs/` survives a change to that list, and S5's isolated prefix test fails loudly if the prefix branch is removed. What is *not* protected: if `intent` drops `docs` or `plans`, this feature's discovery narrows silently. Settling that would mean owning our own copy of the segment list — deliberately not done, because D-2 says "reusing `REFERENCE_DOC_DIRS`" and duplicating it invites the two lists to diverge.
+- **F3 residual — three clone states, and only two are in the spec.** AC-2 names `not_cloned`; §6 names "Clone unreadable". `clone_missing` sits between them and is decided here, reaching AC-2's outcome with a distinguishable reason. If a product owner would rather a deleted clone surface as an error, S12's copy and S15's rendering are where that changes — the server contract already distinguishes the case.
 - **Assumption A1 — the `## Project context` literal is duplicated.** `reviewer-core` must not change and exports neither the heading string nor the `\n\n` join, so S7 restates two literals that `prompt.ts:132` owns. If the engine ever changes its heading, the projection silently drifts. Mitigation: the AC-26 integration test is the mechanical detector — a further argument for BQ-1/(a). No way was found to avoid the duplication without touching `reviewer-core`, which is out of scope.
 - **Assumption A2 — `buildPartialTrace`'s `specs_read: []` (`run-executor.ts:557`) stays empty.** That trace is built for failed and cancelled runs at a point where no document has been resolved, so there is nothing to list. REQ-14 speaks about the trace of a run that happened. If REQ-14 is read as covering failed runs too, this becomes a new blocking question.
 - **Assumption A3 — no exactness signal for token counts.** `TiktokenTokenizer.broken` is private and the `Tokenizer` interface exposes only `count`. R2 omits `tokens_exact`; AC-8 requires the estimate label unconditionally, so nothing observable changes.
@@ -451,6 +541,7 @@ S1 → `diff -rq` → S2 → S3 → `db:generate && db:migrate` → S4 → S5 �
 
 - **Read first:** `server/specs/project-context/01-project-context.md` (binding), then `server/INSIGHTS.md` and `client/INSIGHTS.md`, then `reviewer-core/src/prompt.ts` (lines 97–167 — the contract S7 and S10 must match) and `server/src/modules/reviews/run-executor.ts` (lines 200–300 and 370–390 — the injection site and the AC-19 idiom).
 - **Security reference for S5:** `server/src/modules/repo-intel/pipeline/walk.ts` (the walk to copy, symlink skip at `:89`) and `server/src/adapters/git/simple-git.ts` lines 142–143 (the uncontained read that makes S5's gate necessary).
+- **Schema reference for S3:** `server/src/db/schema/context.ts` (the append target) and `server/test/helpers/pg.ts` (the PG16 pin behind F1's choice).
 - **Client patterns for S14–S16:** `client/src/app/repos/[repoId]/pulls/[number]/_components/WhyRiskCard/` (`FileRef`/`FocusRow` truncation + `srOnly`, and `constants.ts`'s `RISK_META` band-as-a-word pattern).
 - **Not reviewed here:** architecture and security review are separate agents. The traversal surface is flagged, not reviewed.
 - **Execution mode is settled: multi-agent, 7 implementer tracks, 11 total invocations.** Every blocking question is answered and every recommendation decided, so `/impl` can start at T0 with no further input.
