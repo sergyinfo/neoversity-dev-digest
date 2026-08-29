@@ -16,6 +16,7 @@ import {
   Settings,
   Repo,
   PrDetail,
+  SpecFile,
 } from '@devdigest/shared';
 
 /**
@@ -203,6 +204,51 @@ describe('platform DTOs', () => {
     const s = Settings.parse({ extra_key: 'x' });
     expect(s.theme).toBe('dark');
     expect((s as Record<string, unknown>).extra_key).toBe('x');
+  });
+
+  it('SpecFile — every field present, and every optional field absent', () => {
+    const full = SpecFile.parse({
+      path: 'server/docs/intent-layer.md',
+      content: '# Intent layer\n',
+      size: 4096,
+      updated_at: '2026-08-29T10:00:00.000Z',
+      tokens_estimate: 1024,
+      over_cap: false,
+      used_by_count: 3,
+    });
+    expect(full.tokens_estimate).toBe(1024);
+    expect(full.over_cap).toBe(false);
+    expect(full.used_by_count).toBe(3);
+
+    // Only `path` is required: a producer that cannot compute a figure omits it
+    // rather than sending 0, and the three L05 fields must stay additive so no
+    // existing producer breaks.
+    const bare = SpecFile.parse({ path: '.devdigest/specs/prd.md' });
+    expect(bare.tokens_estimate).toBeUndefined();
+    expect(bare.over_cap).toBeUndefined();
+    expect(bare.used_by_count).toBeUndefined();
+
+    // `.nullish()` — an explicit null is accepted too, since the row may come
+    // straight from a nullable DB column.
+    expect(() =>
+      SpecFile.parse({
+        path: 'a.md',
+        content: null,
+        size: null,
+        updated_at: null,
+        tokens_estimate: null,
+        over_cap: null,
+        used_by_count: null,
+      }),
+    ).not.toThrow();
+
+    // `tokens_exact` is deliberately NOT part of the contract (R2). Zod strips
+    // unknown keys by default, so sending it is not an error — it simply does
+    // not survive the parse, which is the assertion that a future re-add breaks.
+    expect('tokens_exact' in SpecFile.parse({ path: 'a.md', tokens_exact: true })).toBe(false);
+
+    expect(SpecFile.safeParse({ path: 'a.md', tokens_estimate: 1.5 }).success).toBe(false);
+    expect(SpecFile.safeParse({ size: 1 }).success).toBe(false);
   });
 
   it('Repo + PrDetail', () => {
