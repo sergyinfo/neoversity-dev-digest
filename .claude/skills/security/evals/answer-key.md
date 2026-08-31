@@ -71,7 +71,7 @@ string).
 |---|-------|-----------|------|
 | 5.1 | A05 Injection | `src/controllers/posts.controller.js:132` into `src/lib/render.js:5` | `renderTemplate` builds a shell string for `exec`. `exportPdf:120` passes the constant `DEFAULT_TEMPLATE` — safe. `exportBranded:132` passes `req.query.template` — RCE. Same sink, two callers |
 | 5.2 | A01 Broken access control | `src/controllers/posts.controller.js:81` | The ownership check compares `post.author` against **`req.body.authorId`**, not `req.user.userId`. The attacker supplies the value they are checked against; `author` is public in the `GET /posts/:id` response |
-| 5.3 | A05 Injection / ReDoS | `src/lib/query.js:11` reached from `search` | `new RegExp(String(query.q), 'i')` on an unauthenticated route. `String()` blocks operator injection but not regex injection — `(a+)+$` is catastrophic backtracking against every indexed title |
+| 5.3 | A05 Injection / ReDoS | `src/lib/query.js:11` reached from `search` | `new RegExp(String(query.q), 'i')` on an unauthenticated route. `String()` blocks operator injection but not regex injection — `(a+)+$` is catastrophic backtracking against every title in the collection (`title` carries no index — only `author` and `isPublished` do — so mongod scans the lot) |
 
 Decoys: `create()` destructures explicitly and takes `author` from `req.user.userId`;
 `remove()` uses an atomic `findOneAndDelete` with an ownership filter plus an admin branch;
