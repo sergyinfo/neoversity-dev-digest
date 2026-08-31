@@ -67,6 +67,13 @@ Signal density  61% vs 30%
 Re-run it after any rubric change:
 `npm run grade -- results/security-workspace/iteration-3`
 
+**Read "signal density" as "planted-issue density", not as a noise measure.** Signal
+there means *is this one of the three plants*, so everything else counts as noise by
+construction. Blind judges reading the same reviews with the fixture open found most of
+those extras to be real defects nobody planted, and preferred the baseline in 7 pairs of
+9 — see `history/iteration-4-blind/`. The rubric and that judge measure different things
+and disagree; neither has been settled against a human reader.
+
 Its known weakness is the precision check, which matches decoy patterns against
 finding titles. A bare keyword over-matches: `bcrypt` once tripped on the unrelated
 finding "`/register` is unauthenticated and unthrottled — account spam + bcrypt CPU

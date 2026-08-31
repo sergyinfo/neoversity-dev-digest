@@ -34,7 +34,13 @@ Across three iterations, 27/27 planted issues were found by both arms. The skill
 not change what an Opus-class model finds; it changes what gets reported — half the
 findings at the same recall, LOW items filed as notes rather than findings, in 9 runs
 out of 9. That is why the gate that matters is `withSkillLowDiscipline`, not recall.
-Full write-ups: `skill-evals/history/`.
+
+Two later passes qualify that. A blind pairwise judge, given the same reviews with no
+assertions, preferred the **baseline** in 7 pairs of 9 — it scores completeness and the
+extra findings are largely true, so "half the findings" is not automatically better. And
+a grader agent, checking claims by executing them, found at least one confidently stated
+**wrong** claim in every report it read, in both arms — something no assertion here can
+see. Full write-ups, including the rubric's own weaknesses: `skill-evals/history/`.
 
 ## Running them
 
