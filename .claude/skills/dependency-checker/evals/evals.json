@@ -1,0 +1,64 @@
+{
+  "skill_name": "dependency-checker",
+  "description": "Does the skill surface the wiring facts of this repo that package tooling cannot see?",
+  "reviewKind": "dependency",
+  "notes": "The fixture is this repository itself \u2014 the thing the skill was built for. Plants are facts verified by hand before the run: mcp is on zod ^4.2.0 while the vendored contracts it aliases are zod ^3.24.1; e2e carries both a package-lock.json and a pnpm-lock.yaml; neither mcp nor reviewer-core declares @devdigest/shared in its manifest. The 'method' plant is different in kind \u2014 it asks whether the report separates what a dependency drags in from what actually disappears when it is removed. Both arms get Bash, or the comparison would measure tool access rather than the skill.",
+  "executorTools": [
+    "Read",
+    "Glob",
+    "Grep",
+    "Write",
+    "Bash"
+  ],
+  "gates": {
+    "newSkillCategoryRecall": {
+      "repo-invariant": 0.8
+    },
+    "minCategoryRecallDelta": {
+      "repo-invariant": 0.4
+    }
+  },
+  "evals": [
+    {
+      "id": "devdigest-repo-audit",
+      "tier": "repo",
+      "prompt": "Can you audit our dependencies? I want to know what each package costs us, how the components hang together, and what we should deal with first.",
+      "scope": "Review scope: the repository at <FIXTURE>. It has five components \u2014 server, client, reviewer-core, mcp, e2e \u2014 plus a skill-evals harness. Look at the manifests, the lockfiles, the tsconfig files and the installed trees.\n\nDo NOT read anything under docs/dependencies/ \u2014 a previous report lives there and reading it invalidates this run. Do not read node_modules file by file; measure it instead. Do not modify anything in the repository.",
+      "expected_output": "A structured report naming the zod major mismatch between mcp and the contracts it aliases, the two lockfiles in e2e, and the alias-only @devdigest/shared dependency \u2014 with weights that distinguish total from exclusive cost.",
+      "files": [
+        "../../.."
+      ],
+      "expectations": [
+        "Reports that mcp is on zod 4 while the vendored contracts it aliases are zod 3",
+        "Reports that e2e contains two lockfiles",
+        "Reports that mcp and reviewer-core resolve @devdigest/shared only through a tsconfig alias, with no manifest entry",
+        "Distinguishes what a dependency drags in from what would actually be freed by removing it"
+      ],
+      "plants": [
+        {
+          "id": "zod-major-mismatch",
+          "category": "repo-invariant",
+          "pattern": "zod ?v?3|zod-3|zod 3"
+        },
+        {
+          "id": "two-lockfiles",
+          "category": "repo-invariant",
+          "pattern": "two lockfiles|both lockfiles|duplicate lockfile|conflicting lockfile|two lock files"
+        },
+        {
+          "id": "alias-only-dependency",
+          "category": "repo-invariant",
+          "pattern": "alias[- ]only|not declared|never declared|no manifest entry|compile[- ]time only|not a (real )?dependency|absent from the manifest|no package\\.json entry"
+        },
+        {
+          "id": "exclusive-vs-total-weight",
+          "category": "method",
+          "pattern": "exclusive"
+        }
+      ],
+      "decoys": [
+        "agent-runner"
+      ]
+    }
+  ]
+}
