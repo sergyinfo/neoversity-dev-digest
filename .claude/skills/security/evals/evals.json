@@ -1,6 +1,7 @@
 {
   "skill_name": "security",
   "description": "Does the security skill change what a review finds, or only what it reports?",
+  "reviewKind": "security",
   "notes": "skill-creator reads skill_name/evals[].{id,prompt,expected_output,files,expectations}. The tier/plants/decoys/gates fields are extra and are what skill-evals/run.ts grades on; skill-creator ignores them.",
   "tiers": {
     "textbook": "Iteration-1 corpus. Plants are canonical OWASP patterns recognisable on sight. Kept because they are still valid cases, but both arms score 100% on them \u2014 not run by default.",

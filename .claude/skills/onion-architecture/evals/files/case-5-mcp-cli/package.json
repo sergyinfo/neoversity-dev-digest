@@ -1,0 +1,13 @@
+{
+  "name": "@devdigest/mcp",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "bin": { "devdigest": "dist/cli.js" },
+  "dependencies": {
+    "@devdigest/reviewer-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.12.0",
+    "undici": "7.2.0",
+    "zod": "^4.0.5"
+  }
+}

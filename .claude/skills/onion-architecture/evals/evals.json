@@ -1,0 +1,216 @@
+{
+  "skill_name": "onion-architecture",
+  "description": "Does the module-boundary section in v2 catch violations that v1 cannot see?",
+  "reviewKind": "architecture",
+  "notes": "Each tier was measured against a different frozen baseline: module-boundary vs v1 (+0.00), invariant vs v2 (+0.67), forbidden-import vs v3. The baselineSkill field below applies to whichever tier is being run now \u2014 see history/ for the recorded ones.",
+  "baselineSkill": "skill-evals/history/onion-v3-snapshot",
+  "baselineLabel": "old_skill",
+  "gates": {
+    "newSkillCategoryRecall": {
+      "forbidden": 0.8
+    },
+    "minCategoryRecallDelta": {
+      "forbidden": 0.4
+    },
+    "maxCategoryRecallDelta": {
+      "invariant": 0.34,
+      "ring": 0.34
+    }
+  },
+  "evals": [
+    {
+      "id": "digest-module",
+      "tier": "module-boundary",
+      "prompt": "Review the architecture of this new digest module before I open the PR \u2014 does anything here break our layering or module rules?",
+      "expected_output": "Reports the direct import of another module's service, the repo-intel pipeline import that bypasses the container facade, and the concrete adapter class in the application ring \u2014 while leaving the _shared and platform imports alone.",
+      "files": [
+        "evals/files/case-1-digest-module"
+      ],
+      "expectations": [
+        "Reports the cross-module import of BriefService from ../brief/service.js",
+        "Reports the direct repo-intel pipeline import that bypasses container.repoIntel",
+        "Reports the concrete OctokitGitHubClient dependency in the service"
+      ],
+      "plants": [
+        {
+          "id": "cross-module-service-import",
+          "category": "module",
+          "pattern": "brief/service|BriefService"
+        },
+        {
+          "id": "repo-intel-facade-bypass",
+          "category": "module",
+          "pattern": "repo-intel/pipeline|runPipeline"
+        },
+        {
+          "id": "concrete-adapter-in-service",
+          "category": "ring",
+          "pattern": "OctokitGitHubClient"
+        }
+      ],
+      "decoys": [
+        "_shared/context",
+        "platform/errors"
+      ]
+    },
+    {
+      "id": "feed-module",
+      "tier": "module-boundary",
+      "prompt": "Architecture review on this feed module please \u2014 I want to know if the layers are right before it lands.",
+      "expected_output": "Reports the filesystem autoload replacing static registration, the Fastify type dragged into the domain contract, and the repository importing a constant from routes \u2014 while leaving the shared-interface dependency and the _shared import alone.",
+      "files": [
+        "evals/files/case-2-feed-module"
+      ],
+      "expectations": [
+        "Reports that the module is registered by filesystem autoload and dynamic import rather than a static line in modules/index.ts",
+        "Reports FastifyRequest reaching the domain contract",
+        "Reports the repository importing FEED_MAX_PAGE from routes.ts"
+      ],
+      "plants": [
+        {
+          "id": "autoload-registration",
+          "category": "module",
+          "pattern": "autoload|readdir|dynamic import"
+        },
+        {
+          "id": "framework-in-contract",
+          "category": "ring",
+          "pattern": "FastifyRequest"
+        },
+        {
+          "id": "repository-imports-routes",
+          "category": "ring",
+          "pattern": "FEED_MAX_PAGE"
+        }
+      ],
+      "decoys": [
+        "_shared/schemas"
+      ]
+    },
+    {
+      "id": "insights-module",
+      "tier": "module-boundary",
+      "prompt": "Can you check the architecture of this insights module? Something about it feels off but I can't place it.",
+      "expected_output": "Reports the cross-module state singleton, the raw SQL in the service, and the business logic in the route handler \u2014 while confirming the container.repoIntel facade call and the platform/jobs import are correct.",
+      "files": [
+        "evals/files/case-3-insights-module"
+      ],
+      "expectations": [
+        "Reports the conventionCache singleton imported from another module",
+        "Reports the raw SQL executed in the service rather than the repository",
+        "Reports the ranking and degraded-fallback logic living in the route handler"
+      ],
+      "plants": [
+        {
+          "id": "cross-module-singleton",
+          "category": "module",
+          "pattern": "conventionCache|conventions/state"
+        },
+        {
+          "id": "sql-in-service",
+          "category": "ring",
+          "pattern": "raw SQL|db\\.execute|sql`"
+        },
+        {
+          "id": "logic-in-route",
+          "category": "ring",
+          "pattern": "ranked|degraded|highConfidence"
+        }
+      ],
+      "decoys": [
+        "repoIntel\\.summarize",
+        "platform/jobs"
+      ]
+    },
+    {
+      "id": "mcp-review-tool",
+      "tier": "invariant",
+      "prompt": "Architecture review of our MCP server package before the next release, please. 15 files, and I'd rather find out now if something in here is quietly wrong.",
+      "expected_output": "Reports the value import of a vendored zod schema, the review POST that never warms the diff, and the console.log on the stdio wire \u2014 while confirming the import-type line, rerun-review's correct ordering and the stderr logger are right.",
+      "files": [
+        "evals/files/case-4-mcp-review-tool"
+      ],
+      "expectations": [
+        "Reports that reviewRequestSchema is imported as a value from the vendored contracts rather than with import type",
+        "Reports that run_review POSTs the review without first fetching the pull, so the review runs on an empty diff",
+        "Reports the console.log in list-pulls, which writes into the stdio protocol stream"
+      ],
+      "plants": [
+        {
+          "id": "vendored-value-import",
+          "category": "invariant",
+          "pattern": "zod ?v?3|zod-3"
+        },
+        {
+          "id": "review-without-warm-diff",
+          "category": "invariant",
+          "pattern": "empty diff|warm|missing GET|without .{0,40}fetch|no prior GET|stale diff"
+        },
+        {
+          "id": "console-log-on-wire",
+          "category": "invariant",
+          "pattern": "console\\.log"
+        },
+        {
+          "id": "domain-constructs-client",
+          "category": "ring",
+          "pattern": "new ApiClient"
+        },
+        {
+          "id": "tool-calls-another-tool",
+          "category": "module",
+          "pattern": "runReviewTool\\.handler"
+        },
+        {
+          "id": "tool-bypasses-client",
+          "category": "ring",
+          "pattern": "diff-summary|diffSummary"
+        }
+      ],
+      "decoys": [
+        "rerun-review",
+        "rerunReviewTool",
+        "process\\.stderr",
+        "capList",
+        "capText"
+      ]
+    },
+    {
+      "id": "mcp-cli",
+      "tier": "forbidden-import",
+      "prompt": "Architecture review of the devdigest CLI package before release. It grew a local review path recently and I want a second opinion on the shape of it.",
+      "expected_output": "Reports that the CLI imports reviewer-core and runs the review in-process, bypassing the server's executor \u2014 while leaving review-pr's HTTP path and the stderr logger alone.",
+      "files": [
+        "evals/files/case-5-mcp-cli"
+      ],
+      "expectations": [
+        "Reports that commands/review.ts imports reviewDiff and loadAgent from @devdigest/reviewer-core and runs the review in-process",
+        "Reports the console.log in status.ts, which writes onto the stdio stream",
+        "Reports that status.ts calls undici directly instead of going through ApiClient"
+      ],
+      "plants": [
+        {
+          "id": "cli-imports-reviewer-core",
+          "category": "forbidden",
+          "pattern": "grounding|run-executor|run executor|second implementation|in-process review"
+        },
+        {
+          "id": "console-log-on-wire",
+          "category": "invariant",
+          "pattern": "console\\.log"
+        },
+        {
+          "id": "command-bypasses-client",
+          "category": "ring",
+          "pattern": "statusCommand|status\\.ts"
+        }
+      ],
+      "decoys": [
+        "review-pr",
+        "reviewPrCommand",
+        "process\\.stderr",
+        "renderOutcome"
+      ]
+    }
+  ]
+}
