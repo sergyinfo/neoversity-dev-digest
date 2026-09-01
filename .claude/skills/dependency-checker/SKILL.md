@@ -74,7 +74,14 @@ no other dependency also needs. They diverge sharply: `@testcontainers/postgresq
 `testcontainers`. **Every removal recommendation must quote `exclusive`.** A recommendation
 that quotes `total` is wrong by roughly the amount it overstates.
 
-**3. Check the invariants above by hand.** The script reports the facts; whether a
+**3. For every alias, check that the target is also a declared dependency.** The alias
+makes it compile; nothing makes it resolve. `mcp` and `reviewer-core` both alias
+`@devdigest/shared` and neither declares it in `package.json`, so `tsc` is happy and the
+built output imports a specifier that exists in no `node_modules`. It only works today
+because nothing runs the built artifact. Report the pair — the alias and the missing
+declaration — because either half alone reads as fine.
+
+**4. Check the invariants above by hand.** The script reports the facts; whether a
 two-copy alias has drifted, or a raw-source alias now crosses a version boundary, needs
 you to open the files.
 

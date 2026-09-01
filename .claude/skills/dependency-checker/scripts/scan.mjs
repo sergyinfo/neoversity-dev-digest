@@ -268,13 +268,28 @@ for (const p of packages) {
       const owner = packages
         .filter((q) => q.path !== '.' && resolved.startsWith(`${q.path}/`))
         .sort((a, b) => b.path.length - a.path.length)[0];
+      // The alias makes it compile; a manifest entry is what makes it resolve at
+      // runtime. An alias whose package name is declared nowhere emits an import
+      // specifier that exists in no node_modules.
+      const pkgName = alias.replace(/\/\*$/, '');
+      const manifest = readJson(path.join(ROOT, p.path === '.' ? '.' : p.path, 'package.json')) ?? {};
+      const declared =
+        pkgName in (manifest.dependencies ?? {}) ||
+        pkgName in (manifest.devDependencies ?? {}) ||
+        pkgName in (manifest.peerDependencies ?? {}) ||
+        pkgName.startsWith('.') ||
+        pkgName === '@/*' ||
+        pkgName === '@';
+
       internalEdges.push({
         from: p.path,
         alias,
+        aliasPackage: pkgName,
         target: resolved,
         toPackage: owner ? owner.path : null,
         crossesPackage: Boolean(owner && owner.path !== p.path),
         intoSource: /\/src\//.test(resolved),
+        declaredInManifest: declared,
       });
     }
   }
@@ -290,8 +305,14 @@ const duplicatedAliases = [...aliasTargets]
   .filter(([, set]) => set.size > 1)
   .map(([alias, set]) => ({ alias, targets: [...set] }));
 
+/** Aliases that compile but resolve to nothing at runtime. */
+const undeclaredAliases = internalEdges
+  .filter((e) => !e.declaredInManifest && !e.alias.startsWith('@/'))
+  .map((e) => ({ from: e.from, alias: e.alias, target: e.target }));
+
 const out = {
   root: ROOT,
+  undeclaredAliases,
   generatedBy: 'dependency-checker/scripts/scan.mjs',
   totals: {
     packages: packages.length,

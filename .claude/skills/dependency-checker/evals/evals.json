@@ -2,7 +2,7 @@
   "skill_name": "dependency-checker",
   "description": "Does the skill surface the wiring facts of this repo that package tooling cannot see?",
   "reviewKind": "dependency",
-  "notes": "The fixture is this repository itself \u2014 the thing the skill was built for. Plants are facts verified by hand before the run: mcp is on zod ^4.2.0 while the vendored contracts it aliases are zod ^3.24.1; e2e carries both a package-lock.json and a pnpm-lock.yaml; neither mcp nor reviewer-core declares @devdigest/shared in its manifest. The 'method' plant is different in kind \u2014 it asks whether the report separates what a dependency drags in from what actually disappears when it is removed. Both arms get Bash, or the comparison would measure tool access rather than the skill.",
+  "notes": "Redesigned after the first run measured nothing. zod and the lockfiles are now CONTROLS \u2014 both arms found them 5/5, they discriminate nothing, and their job is to catch drift. The exclusive/total metric was dropped as a plant: only the skill has the script that computes it, so it measured tooling. The one recall plant is the alias-without-declaration check, which is now actually prescribed by SKILL.md \u2014 in the first run it tested something the skill never taught, and the baseline was the only arm to state it.",
   "executorTools": [
     "Read",
     "Glob",
@@ -12,10 +12,13 @@
   ],
   "gates": {
     "newSkillCategoryRecall": {
-      "repo-invariant": 0.8
+      "taught": 0.8
     },
     "minCategoryRecallDelta": {
-      "repo-invariant": 0.4
+      "taught": 0.4
+    },
+    "maxCategoryRecallDelta": {
+      "control": 0.34
     }
   },
   "evals": [
@@ -29,36 +32,39 @@
         "../../.."
       ],
       "expectations": [
-        "Reports that mcp is on zod 4 while the vendored contracts it aliases are zod 3",
-        "Reports that e2e contains two lockfiles",
-        "Reports that mcp and reviewer-core resolve @devdigest/shared only through a tsconfig alias, with no manifest entry",
-        "Distinguishes what a dependency drags in from what would actually be freed by removing it"
+        "Reports that mcp and reviewer-core alias @devdigest/shared without declaring it, so the built output imports an unresolvable specifier",
+        "Does not file the duplicated typescript, the reviewer-core zod pin, or the committed agent-runner dist as findings"
       ],
       "plants": [
         {
+          "id": "alias-without-declaration",
+          "category": "taught",
+          "pattern": "no declared dependency|not a declared dependency|neither is a declared dependency|declares? (it|@devdigest/shared) in (no|neither)|imports? a specifier that",
+          "titleOnly": true,
+          "describe": "A tsconfig path alias resolves at compile time to a package that is declared in no manifest \u2014 mcp and reviewer-core alias @devdigest/shared, server aliases @devdigest/reviewer-core and @devdigest/shared, and none of them list those names in dependencies. The review must assert this is a problem: the alias type-checks and the emitted import resolves to nothing at runtime. Any wording counts; naming the alias without saying the declaration is missing does not."
+        },
+        {
           "id": "zod-major-mismatch",
-          "category": "repo-invariant",
-          "pattern": "zod ?v?3|zod-3|zod 3"
+          "category": "control",
+          "pattern": "zod ?v?3|zod-3|zod 3",
+          "titleOnly": true,
+          "describe": "mcp declares zod ^4.2.0 while the vendored contracts it aliases (server/src/vendor/shared) are written for zod ^3.24.1, so two zod majors meet in one program."
         },
         {
           "id": "two-lockfiles",
-          "category": "repo-invariant",
-          "pattern": "two lockfiles|both lockfiles|duplicate lockfile|conflicting lockfile|two lock files"
-        },
-        {
-          "id": "alias-only-dependency",
-          "category": "repo-invariant",
-          "pattern": "alias[- ]only|not declared|never declared|no manifest entry|compile[- ]time only|not a (real )?dependency|absent from the manifest|no package\\.json entry"
-        },
-        {
-          "id": "exclusive-vs-total-weight",
-          "category": "method",
-          "pattern": "exclusive"
+          "category": "control",
+          "pattern": "two lockfiles|both lockfiles|duplicate lockfile|conflicting lockfile|two lock files|two live lockfiles",
+          "titleOnly": true,
+          "describe": "e2e contains both package-lock.json and pnpm-lock.yaml, so which versions get installed depends on which package manager is run."
         }
       ],
       "decoys": [
-        "agent-runner"
+        "the same dependency (typescript, vitest) installed in several packages \u2014 that is the no-workspace design, not waste",
+        "reviewer-core pinning zod to its own node_modules \u2014 deliberate, because the vendored contracts are zod 3",
+        "agent-runner/dist being committed \u2014 it ships as a GitHub Action and .gitignore re-includes it on purpose"
       ]
     }
-  ]
+  ],
+  "grader": "agent",
+  "lowDisciplineApplies": false
 }
