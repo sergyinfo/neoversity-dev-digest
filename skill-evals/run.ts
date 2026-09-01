@@ -30,6 +30,19 @@ interface Plant {
   pattern: string;
   /** Optional grouping so recall can be reported per kind of violation. */
   category?: string;
+  /**
+   * Prose statement of the defect, for the agent grader. Nine plant patterns in a row
+   * missed a finding that was filed under wording the regex did not carry, so what a
+   * plant *is* belongs in a sentence, not in an alternation.
+   */
+  describe?: string;
+  /**
+   * Match only against finding titles, not the whole findings region. Use this whenever
+   * the skill teaches the fact in words a faithful report will quote — a title is the
+   * reviewer's own summary, so the skill's prose cannot reach it without the reviewer
+   * actually filing the finding.
+   */
+  titleOnly?: boolean;
 }
 
 interface Case {
@@ -60,6 +73,15 @@ interface Suite {
   baselineLabel?: string;
   /** What kind of review the executor is asked for: "security", "architecture", ... */
   reviewKind?: string;
+  /** 'regex' (cheap, brittle) or 'agent' (reads the review and judges). */
+  grader?: 'regex' | 'agent' | 'stored';
+  /**
+   * Whether "no LOW/Info item in the findings list" applies. It comes from the security
+   * skill, which says LOW -> do not report. A skill that prescribes a low-severity tier
+   * of its own — dependency-checker has P3 — is penalised by it for following its own
+   * template, so it must be switched off there. Defaults to on.
+   */
+  lowDisciplineApplies?: boolean;
   /**
    * Tools the executor gets. Defaults to a read-only set under --restricted. A skill
    * whose procedure runs a bundled script needs Bash, and BOTH arms must get it or the
@@ -87,6 +109,8 @@ function armsFor(suite: Suite): { treatment: Arm; baseline: Arm } {
 }
 
 interface Grade {
+  /** Findings that cite the right place and rest on a false premise. Agent grader only. */
+  falseClaims?: { claim: string; why: string }[];
   plantsFound: string[];
   plantsMissed: string[];
   /** category -> [found, total]. Empty when the suite does not categorise plants. */
@@ -134,6 +158,11 @@ function parseArgs(argv: string[]) {
     // Used to check the grader against a known-good corpus, and to re-score an
     // old run after the rubric changes.
     gradeOnly: get('--grade-only'),
+    // Re-run one side only. Half a matrix dying to a transient failure is common
+    // enough that repeating the surviving half is pure waste.
+    arm: get('--arm'),
+    grader: get('--grader') as 'regex' | 'agent' | 'stored' | undefined,
+    graderModel: get('--grader-model', process.env.SKILL_EVALS_GRADER_MODEL ?? 'opus')!,
     // Print the prompt for the first case in each arm and exit. Cheap way to see
     // exactly what an executor is told before spending a run on it.
     printPrompt: argv.includes('--print-prompt'),
@@ -205,7 +234,11 @@ Constraints:
 
 /* ------------------------------------------------------------- execution -- */
 
-function runClaude(prompt: string, model: string, tools?: string[]): Promise<{ json: any; raw: string }> {
+function runClaude(
+  prompt: string,
+  model: string,
+  tools?: string[]
+): Promise<{ json: any; raw: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     // --restricted drops Bash and the other code-running tools; the executor only
     // needs to read the fixture and write one file. bypassPermissions is rejected
@@ -240,11 +273,13 @@ function runClaude(prompt: string, model: string, tools?: string[]): Promise<{ j
     child.stderr.on('data', (d) => (err += d));
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(`claude exited ${code}: ${err.trim() || out.trim()}`));
+      // A non-zero exit does not mean nothing happened: runs have written a complete
+      // review and then exited 1. Whether the run is usable is decided by the caller,
+      // from the output on disk.
       try {
-        resolve({ json: JSON.parse(out), raw: out });
+        resolve({ json: JSON.parse(out), raw: out, exitCode: code ?? 0 });
       } catch {
-        reject(new Error(`unparseable claude output: ${out.slice(0, 400)}`));
+        reject(new Error(`claude exited ${code} with unparseable output: ${(err || out).trim().slice(0, 300)}`));
       }
     });
   });
@@ -253,7 +288,14 @@ function runClaude(prompt: string, model: string, tools?: string[]): Promise<{ j
 /* --------------------------------------------------------------- grading -- */
 
 const SEVERITY_CELL = /^\**\s*(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*\**$/i;
-const FINDING_HEADING = /^#{2,4}\s*(?:finding\s*)?(\d+[.)—-]|[A-Z]-?\d+|F-\d+)/i;
+// Reviews label findings three ways: a markdown heading, a bold lead-in (**F1. …**),
+// or a summary-table row. All three are titles; only the first was recognised.
+// Two shapes, and the explicit one wins. A report that labels findings F1, F2, … is
+// telling you exactly which lines are findings; counting generic numbered headings as
+// well picks up the report's own section numbering ("## 1. Summary") and its severity
+// tiers ("### P1 —"). The better the skill structures the report, the worse that gets.
+const FINDING_LABEL = /^(?:#{2,4}\s*|\*\*)(?:finding\s*)?F-?\d+[.)—:\s]/i;
+const FINDING_HEADING = /^#{2,4}\s*(?:finding\s*)?(\d+[.)—-]|[A-Z]-?\d+|F-?\d+)/i;
 
 /**
  * Everything before the first "these are not findings" style heading. Both arms
@@ -273,6 +315,8 @@ function findingsRegion(text: string): string {
  * are tallied separately and the richer one wins.
  */
 function tallyFindings(region: string): { rows: string[]; count: number; severities: Record<string, number> } {
+  // Decide once per document which shape it uses.
+  const labelled = region.split('\n').some((l) => FINDING_LABEL.test(l.trim()));
   const tableRows: string[] = [];
   const tableSev: Record<string, number> = {};
   const headingRows: string[] = [];
@@ -294,7 +338,7 @@ function tallyFindings(region: string): { rows: string[]; count: number; severit
       continue;
     }
 
-    if (FINDING_HEADING.test(s)) {
+    if (labelled ? FINDING_LABEL.test(s) : FINDING_HEADING.test(s)) {
       headingRows.push(s);
       const m = /\b(CRITICAL|HIGH|MEDIUM|LOW|INFO)\b/i.exec(s);
       if (m) {
@@ -312,12 +356,13 @@ function tallyFindings(region: string): { rows: string[]; count: number; severit
   };
 }
 
-function grade(c: Case, review: string): Grade {
+function grade(c: Case, review: string, lowDisciplineApplies: boolean): Grade {
   const region = findingsRegion(review);
   const { rows, count: findings, severities: sev } = tallyFindings(region);
   const low = (sev.low ?? 0) + (sev.info ?? 0);
 
-  const hit = (p: Plant) => new RegExp(p.pattern, 'i').test(region);
+  const titles = rows.join('\n');
+  const hit = (p: Plant) => new RegExp(p.pattern, 'i').test(p.titleOnly ? titles : region);
   const found = c.plants.filter(hit).map((p) => p.id);
   const missed = c.plants.filter((p) => !found.includes(p.id)).map((p) => p.id);
 
@@ -331,40 +376,177 @@ function grade(c: Case, review: string): Grade {
   const decoyRe = new RegExp(c.decoys.join('|'), 'i');
   const decoyRows = rows.filter((r) => decoyRe.test(r) && !/low|info/i.test(r));
 
+  return finishGrade(c, lowDisciplineApplies, {
+    plantsFound: found,
+    plantsMissed: missed,
+    findings,
+    lowOrInfoInFindings: low,
+    decoysNamedInFindings: decoyRows,
+  });
+}
+
+/**
+ * A plant pattern that matches the skill's own text scores the skill for reciting
+ * itself. This is how a dependency-checker run once read 5/5 on a plant it had found
+ * once: the pattern matched a sentence SKILL.md instructs the reviewer to write.
+ *
+ * Not fatal — a skill legitimately names the things it tells you to look for — but it
+ * has to be visible, so it is printed at startup and recorded in the benchmark.
+ */
+async function patternsEchoingSkill(
+  cases: Case[],
+  skillDir: string
+): Promise<{ caseId: string; plant: string; pattern: string; excerpt: string }[]> {
+  let skillText = '';
+  try {
+    skillText = await readFile(path.join(skillDir, 'SKILL.md'), 'utf8');
+  } catch {
+    return [];
+  }
+  const out: { caseId: string; plant: string; pattern: string; excerpt: string }[] = [];
+  for (const c of cases) {
+    for (const p of c.plants) {
+      const m = new RegExp(p.pattern, 'i').exec(skillText);
+      if (m) {
+        const at = Math.max(0, m.index - 40);
+        out.push({
+          caseId: c.id,
+          plant: p.id,
+          pattern: p.pattern,
+          excerpt: skillText.slice(at, m.index + m[0].length + 40).replace(/\s+/g, ' '),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+
+
+/** The rubric. Both graders feed it; neither gets to invent its own scoring. */
+function finishGrade(
+  c: Case,
+  lowDisciplineApplies: boolean,
+  raw: {
+    plantsFound: string[];
+    plantsMissed: string[];
+    findings: number;
+    lowOrInfoInFindings: number;
+    decoysNamedInFindings: string[];
+    falseClaims?: { claim: string; why: string }[];
+  }
+): Grade {
+  const categoryRecall: Record<string, [number, number]> = {};
+  for (const p of c.plants) {
+    if (!p.category) continue;
+    const [f, t] = categoryRecall[p.category] ?? [0, 0];
+    categoryRecall[p.category] = [f + (raw.plantsFound.includes(p.id) ? 1 : 0), t + 1];
+  }
+
   const assertions = [
     {
       text: 'All planted issues are reported',
-      passed: missed.length === 0,
-      evidence: missed.length === 0 ? `found: ${found.join(', ')}` : `missed: ${missed.join(', ')}`,
+      passed: raw.plantsMissed.length === 0,
+      evidence: raw.plantsMissed.length === 0 ? `found: ${raw.plantsFound.join(', ')}` : `missed: ${raw.plantsMissed.join(', ')}`,
     },
     {
       text: 'No control that is correct as written is filed as a finding',
-      passed: decoyRows.length === 0,
-      evidence: decoyRows.length === 0 ? 'no decoy named in a finding title' : decoyRows.join(' // '),
+      passed: raw.decoysNamedInFindings.length === 0,
+      evidence: raw.decoysNamedInFindings.length === 0 ? 'no control filed as a finding' : raw.decoysNamedInFindings.join(' // '),
     },
+    ...(lowDisciplineApplies
+      ? [
+          {
+            text: "No LOW/Info item sits in the findings list (the skill's rule is LOW -> do not report)",
+            passed: raw.lowOrInfoInFindings === 0,
+            evidence: `${raw.findings} findings, ${raw.lowOrInfoInFindings} rated LOW/Info`,
+          },
+        ]
+      : []),
     {
-      text: "No LOW/Info item sits in the findings list (the skill's rule is LOW -> do not report)",
-      passed: low === 0,
-      evidence: `${findings} findings, ${low} rated LOW/Info inside the findings list`,
-    },
-    {
-      text: 'The review reports at least one finding with a severity label',
-      passed: findings > 0,
-      evidence: JSON.stringify(sev),
+      text: 'No finding rests on a false premise',
+      passed: (raw.falseClaims ?? []).length === 0,
+      evidence: (raw.falseClaims ?? []).length === 0 ? 'no false claim found' : (raw.falseClaims ?? []).map((f) => f.claim).join(' // '),
     },
   ];
 
   return {
-    plantsFound: found,
-    plantsMissed: missed,
+    ...raw,
     categoryRecall,
-    findings,
-    lowOrInfoInFindings: low,
-    decoysNamedInFindings: decoyRows,
     assertions,
     passed: assertions.filter((a) => a.passed).length,
     total: assertions.length,
-  };
+  } as Grade;
+}
+
+/* -------------------------------------------------------- agent grading -- */
+
+/**
+ * Grade one review with a subagent instead of a regex.
+ *
+ * The agent decides only two things: was each planted defect *filed as a finding*, and
+ * was any correct-as-written control filed as one. Everything else — the assertions, the
+ * pass rate, the gates — stays in code, so the rubric lives in one place and two runs
+ * remain comparable.
+ *
+ * It gets Bash on purpose. The one failure class nothing else caught was a finding that
+ * was correctly located, correctly severity-rated, and resting on a false premise; the
+ * only way that surfaced was an agent executing the claimed payload.
+ */
+async function gradeWithAgent(
+  c: Case,
+  reviewPath: string,
+  fixtureAbs: string,
+  model: string
+): Promise<Partial<Grade> & { plantsFound: string[]; plantsMissed: string[] }> {
+  const plants = c.plants
+    .map((p) => `  - id "${p.id}": ${p.describe ?? `matches /${p.pattern}/`}`)
+    .join('\n');
+  const decoys = (c.decoys ?? []).map((d) => `  - ${d}`).join('\n');
+
+  const prompt = `You are grading one code review against a known list of planted defects.
+
+The review: ${reviewPath}
+The code it reviews: ${fixtureAbs}
+
+Planted defects — decide for each whether the review FILED IT AS A FINDING:
+${plants}
+
+Controls that are correct as written. If the review files one of these as a defect, that is a false positive:
+${decoys || '  (none)'}
+
+Rules:
+- "Filed as a finding" means the review asserts it is a problem, in its findings list.
+  Mentioning the code, quoting it, or listing it under "checked and correct" is NOT filing it.
+- Wording will not match mine. Judge the claim, not the phrasing.
+- You may read the code and RUN read-only commands to check whether a claim is actually
+  true. A finding can cite the right line, carry a working fix, and rest on a false
+  premise — say so in falseClaims when you find one.
+- Count findings as the review itself presents them. Section headings, severity tier
+  headers and summary rows are not findings.
+
+Reply with ONLY this JSON, no prose around it:
+{"plants":[{"id":"...","found":true,"evidence":"the finding title or sentence, quoted"}],
+ "decoysFiledAsFindings":[{"decoy":"...","evidence":"..."}],
+ "findingsCount":0,
+ "lowOrInfoCount":0,
+ "falseClaims":[{"claim":"...","why":"..."}]}`;
+
+  const { json } = await runClaude(prompt, model, ['Read', 'Glob', 'Grep', 'Bash']);
+  const text: string = json.result ?? '';
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error(`grader returned no JSON: ${text.slice(0, 200)}`);
+  const v = JSON.parse(m[0]);
+
+  const found: string[] = (v.plants ?? []).filter((p: any) => p.found).map((p: any) => p.id);
+  return {
+    plantsFound: found,
+    plantsMissed: c.plants.map((p) => p.id).filter((id) => !found.includes(id)),
+    findings: v.findingsCount ?? 0,
+    lowOrInfoInFindings: v.lowOrInfoCount ?? 0,
+    decoysNamedInFindings: (v.decoysFiledAsFindings ?? []).map((d: any) => `${d.decoy}: ${d.evidence}`),
+    falseClaims: v.falseClaims ?? [],
+  } as any;
 }
 
 /* ------------------------------------------------------------------- run -- */
@@ -396,11 +578,24 @@ async function main() {
     ? suite.evals.filter((c) => args.cases!.includes(c.id))
     : suite.evals.filter((c) => c.tier === args.tier);
 
+  const graderMode = args.grader ?? suite.grader ?? 'regex';
+  const useAgentGrader = graderMode === 'agent';
+  const lowApplies = suite.lowDisciplineApplies !== false;
+
   if (cases.length === 0)
     throw new Error(`no cases matched ${args.cases ? `--cases=${args.cases.join(',')}` : `--tier=${args.tier}`}`);
 
   if (args.gradeOnly) {
-    const report = summarise(suite, await gradeExisting(cases, args.gradeOnly, armsFor(suite)));
+    const report = summarise(
+      suite,
+      await gradeExisting(cases, args.gradeOnly, armsFor(suite), {
+        agent: useAgentGrader,
+        stored: graderMode === 'stored',
+        skillDir,
+        model: args.graderModel,
+        lowApplies,
+      })
+    );
     console.log(renderMarkdown(suite, report));
     if (report.gateFailures.length > 0) {
       console.error(`\nFAILED gates:\n  - ${report.gateFailures.join('\n  - ')}`);
@@ -414,8 +609,16 @@ async function main() {
     ? path.resolve(REPO_ROOT, suite.baselineSkill)
     : undefined;
 
+  const echoes = await patternsEchoingSkill(cases, skillDir);
+  if (echoes.length) {
+    console.log("\n!! plant patterns that also match the skill's own text:");
+    for (const e of echoes)
+      console.log(`   ${e.caseId}/${e.plant}  /${e.pattern}/\n      …${e.excerpt}…`);
+    console.log('   A review reciting the skill scores these. Use titleOnly, or tighten them.\n');
+  }
+
   if (args.printPrompt) {
-    for (const arm of [arms.treatment, arms.baseline]) {
+    for (const arm of [arms.treatment, arms.baseline].filter((a) => !args.arm || a === args.arm)) {
       console.log(`\n========== ${arm} ==========\n`);
       console.log(
         buildPrompt(cases[0], arm, suite.reviewKind ?? 'code',
@@ -437,19 +640,20 @@ async function main() {
 
   const jobs: (() => Promise<RunResult>)[] = [];
   for (const c of cases) {
-    for (const arm of [arms.treatment, arms.baseline]) {
+    for (const arm of [arms.treatment, arms.baseline].filter((a) => !args.arm || a === args.arm)) {
       for (let run = 1; run <= args.runs; run++) {
         jobs.push(async () => {
           const dir = path.join(args.outDir, c.id, arm, `run-${run}`);
           await mkdir(dir, { recursive: true });
           const reviewPath = path.join(dir, 'review.md');
+          const fixtureAbs = path.join(skillDir, c.files[0]);
           const prompt = buildPrompt(
             c,
             arm,
             suite.reviewKind ?? 'code',
             (suite.executorTools ?? []).some((t) => /^Bash/.test(t)),
             skillDir,
-            path.join(skillDir, c.files[0]),
+            fixtureAbs,
             reviewPath,
             arm === arms.treatment,
             baselineSkillDir
@@ -457,11 +661,26 @@ async function main() {
 
           const label = `${c.id} ${arm} run-${run}`;
           try {
-            const { json } = await runClaude(prompt, args.model, suite.executorTools);
+            const { json, exitCode } = await runClaude(prompt, args.model, suite.executorTools);
             const review = await readFile(reviewPath, 'utf8').catch(() => '');
-            if (!review.trim()) throw new Error('executor wrote no review');
+            if (!review.trim()) {
+              // Zero usage across the board means the request never reached the API —
+              // a quota or auth wall, not a failure of this run. Worth naming, because
+              // it takes out whole arms at once and looks like a model failure.
+              const u = json.usage ?? {};
+              const noUsage = !json.duration_api_ms && !(u.output_tokens ?? 0) && !json.total_cost_usd;
+              throw new Error(
+                noUsage
+                  ? `no API call made (quota or auth wall), exit ${exitCode}`
+                  : `executor wrote no review, exit ${exitCode}`
+              );
+            }
+            if (exitCode !== 0) console.log(`  [note] ${label} exited ${exitCode} but wrote a review; keeping it`);
 
-            const g = grade(c, review);
+            const g =
+              useAgentGrader
+                ? finishGrade(c, lowApplies, (await gradeWithAgent(c, reviewPath, fixtureAbs, args.graderModel)) as any)
+                : grade(c, review, lowApplies);
             const u = json.usage ?? {};
             const res: RunResult = {
               caseId: c.id,
@@ -503,7 +722,12 @@ async function main() {
  * Grade review.md files that already exist under `dir`. Any layout works as long
  * as the path contains the case id, the arm, and a run-N segment.
  */
-async function gradeExisting(cases: Case[], dir: string, arms: { treatment: Arm; baseline: Arm }): Promise<RunResult[]> {
+async function gradeExisting(
+  cases: Case[],
+  dir: string,
+  arms: { treatment: Arm; baseline: Arm },
+  opts: { agent: boolean; stored: boolean; skillDir: string; model: string; lowApplies: boolean }
+): Promise<RunResult[]> {
   const { glob } = await import('node:fs/promises');
   const out: RunResult[] = [];
   for await (const entry of glob('**/review.md', { cwd: dir })) {
@@ -517,8 +741,45 @@ async function gradeExisting(cases: Case[], dir: string, arms: { treatment: Arm;
         : undefined;
     if (!c || !arm) continue;
     const run = Number(/run-(\d+)/.exec(rel)?.[1] ?? 1);
-    const g = grade(c, await readFile(path.join(dir, rel), 'utf8'));
-    out.push({ caseId: c.id, arm, run, ok: true, grade: g, tokens: 0, costUsd: 0, durationMs: 0 });
+    const reviewAbs = path.join(dir, rel);
+    if (opts.stored) {
+      // grading.json sits beside the review in the runner's layout, and one level up
+      // in the older workspaces where reviews live in an outputs/ subdirectory.
+      const candidates = [
+        path.join(path.dirname(reviewAbs), 'grading.json'),
+        path.join(path.dirname(path.dirname(reviewAbs)), 'grading.json'),
+      ];
+      let storedRaw: string | null = null;
+      for (const cand of candidates) {
+        storedRaw = await readFile(cand, 'utf8').catch(() => null);
+        if (storedRaw) break;
+      }
+      if (!storedRaw) {
+        console.log(`  [skip] ${c.id} ${arm} run-${run} — no stored grading.json`);
+        continue;
+      }
+      const stored = JSON.parse(storedRaw);
+      const raw = stored.grade ?? stored;
+      const g2 = finishGrade(c, opts.lowApplies, {
+        plantsFound: raw.plantsFound ?? [],
+        plantsMissed: raw.plantsMissed ?? [],
+        findings: raw.findings ?? 0,
+        lowOrInfoInFindings: raw.lowOrInfoInFindings ?? 0,
+        decoysNamedInFindings: raw.decoysNamedInFindings ?? [],
+        falseClaims: raw.falseClaims ?? [],
+      });
+      out.push({ caseId: c.id, arm, run, ok: true, grade: g2, tokens: 0, costUsd: 0, durationMs: 0 });
+      console.log(`  [${g2.passed}/${g2.total}] ${c.id} ${arm} run-${run} — re-scored from stored judgements`);
+      continue;
+    }
+    const g = opts.agent
+      ? finishGrade(c, opts.lowApplies, (await gradeWithAgent(c, reviewAbs, path.join(opts.skillDir, c.files[0]), opts.model)) as any)
+      : grade(c, await readFile(reviewAbs, 'utf8'), opts.lowApplies);
+    // Persist, so an agent judgement can be re-scored later without paying for it
+    // again — and so a rubric change never silently re-reads a stale regex verdict.
+    const res: RunResult = { caseId: c.id, arm, run, ok: true, grade: g, tokens: 0, costUsd: 0, durationMs: 0 };
+    await writeFile(path.join(path.dirname(reviewAbs), 'grading.json'), JSON.stringify(res, null, 2));
+    out.push(res);
     console.log(
       `  [${g.passed}/${g.total}] ${c.id} ${arm} run-${run} — ${g.findings} findings, ${g.lowOrInfoInFindings} LOW/Info` +
         (g.plantsMissed.length ? `, MISSED ${g.plantsMissed.join('+')}` : '')
@@ -604,7 +865,7 @@ function summarise(suite: Suite, results: RunResult[]) {
       failures.push(`'${cat}' is a control but the arms differ by ${d.toFixed(2)} > ${limit} — something other than the delta moved`);
   }
 
-  return { skill: suite.skill_name, arms, withSkill, without, delta, gateFailures: failures, results };
+  return { skill: suite.skill_name, arms, withSkill, without, delta, gateFailures: failures, results, patternEchoes: [] as unknown[] };
 }
 
 function renderMarkdown(suite: Suite, r: ReturnType<typeof summarise>): string {
