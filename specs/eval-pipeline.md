@@ -1,4 +1,4 @@
-# Spec: Eval Pipeline   |   Spec ID: SPEC-2026-09-02-eval-pipeline   |   Status: draft
+# Spec: Eval Pipeline   |   Spec ID: SPEC-2026-09-02-eval-pipeline   |   Status: approved
 
 Scope: cross-module (`server`, `client`, `reviewer-core`). Lives in the root `specs/`
 per `specs/README.md`.
