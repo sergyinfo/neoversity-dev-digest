@@ -646,7 +646,8 @@ async function main() {
         skillDir,
         model: args.graderModel,
         lowApplies,
-      })
+      }),
+      args.model
     );
     console.log(renderMarkdown(suite, report));
     if (report.gateFailures.length > 0) {
@@ -758,7 +759,7 @@ async function main() {
   }
 
   const results = await pool(jobs, args.concurrency);
-  const report = summarise(suite, results);
+  const report = summarise(suite, results, args.model);
   await writeFile(path.join(args.outDir, 'benchmark.json'), JSON.stringify(report, null, 2));
   await writeFile(path.join(args.outDir, 'benchmark.md'), renderMarkdown(suite, report));
   console.log(`\n${renderMarkdown(suite, report)}`);
@@ -840,7 +841,7 @@ async function gradeExisting(
   return out;
 }
 
-function summarise(suite: Suite, results: RunResult[]) {
+function summarise(suite: Suite, results: RunResult[], model = '') {
   const arm = (a: Arm) => results.filter((r) => r.arm === a && r.ok && r.grade);
   const rate = (a: Arm) => {
     const rs = arm(a);
@@ -922,7 +923,7 @@ function summarise(suite: Suite, results: RunResult[]) {
       failures.push(`'${cat}' is a control but the arms differ by ${d.toFixed(2)} > ${limit} — something other than the delta moved`);
   }
 
-  return { skill: suite.skill_name, arms, withSkill, without, delta, gateFailures: failures, results, patternEchoes: [] as unknown[] };
+  return { skill: suite.skill_name, model, arms, withSkill, without, delta, gateFailures: failures, results, patternEchoes: [] as unknown[] };
 }
 
 function renderMarkdown(suite: Suite, r: ReturnType<typeof summarise>): string {
@@ -943,7 +944,13 @@ function renderMarkdown(suite: Suite, r: ReturnType<typeof summarise>): string {
     `| Signal density | ${pct(w.findingsTotal ? (w.runs * 3) / w.findingsTotal : 0)} | ${pct(b.findingsTotal ? (b.runs * 3) / b.findingsTotal : 0)} | |`,
     `| Tokens per run | ${Math.round(w.tokensMean).toLocaleString()} | ${Math.round(b.tokensMean).toLocaleString()} | |`,
     `| Wall clock per run | ${(w.durationMean / 1000).toFixed(0)}s | ${(b.durationMean / 1000).toFixed(0)}s | |`,
-    `| Cost | $${w.costUsd.toFixed(2)} | $${b.costUsd.toFixed(2)} | |`,
+    // The CLI prices a run from its own model table. For a model id it does not
+    // recognise — every OpenRouter id, which all contain a slash — it falls back to
+    // Claude rates and overstates a DeepSeek run several-fold. Reporting that number
+    // unlabelled would quietly turn the cheap arm into the expensive one.
+    `| Cost | $${w.costUsd.toFixed(2)} | $${b.costUsd.toFixed(2)} | ${
+      r.model.includes('/') ? '**estimate is unreliable off-Anthropic**' : ''
+    } |`,
     ...(Object.keys(w.categoryRecall).length
       ? [
           '',

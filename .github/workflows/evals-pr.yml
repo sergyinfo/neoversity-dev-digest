@@ -114,6 +114,12 @@ jobs:
               echo "ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY"
               # Must be empty, not unset: the CLI prefers x-api-key over the bearer token.
               echo "ANTHROPIC_API_KEY="
+              # Required, not tuning. The CLI defaults max_tokens to 32000 for a model id
+              # it does not recognise, and every OpenRouter id is unrecognised. OpenRouter
+              # bills the affordability check against max_tokens rather than actual usage,
+              # so the default makes every request fail with HTTP 402 unless the account
+              # can pre-fund 32000 output tokens. 16000 still fits a full review.
+              echo "CLAUDE_CODE_MAX_OUTPUT_TOKENS=16000"
             } >> "$GITHUB_ENV"
           else
             test -n "${ANTHROPIC_API_KEY:-}" || { echo "::error::ANTHROPIC_API_KEY is not set"; exit 1; }
