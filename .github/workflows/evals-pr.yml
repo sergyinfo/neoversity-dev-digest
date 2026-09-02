@@ -1,0 +1,212 @@
+# Per-PR evals for the things that steer an agent: skills, repo guides (CLAUDE.md) and
+# subagents. Unlike skill-evals.yml — the weekly verdict on Claude models — this one is a
+# screening pass: one run per arm on a cheap model, and a failed gate is a warning, not a
+# blocked merge. See the "Advisory, not blocking" note on the eval step.
+#
+# What runs is decided by skill-evals/ci/plan.mjs from the changed files. Anything with no
+# suite is named in the job summary and skipped; that is the normal case today, since 10
+# of 13 skills and all 8 agents have no evals yet.
+name: evals (PR)
+
+on:
+  pull_request:
+    paths:
+      - '.claude/skills/**'
+      - '.claude/agents/**'
+      - '**/CLAUDE.md'
+      - 'skill-evals/**'
+      - 'skills-lock.json'
+      - '.github/workflows/evals-pr.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # ---- Model policy. Kept here rather than as workflow inputs: these are job parameters,
+  # not something anyone should be picking per run from a dropdown. Ids and prices come
+  # from docs/agent-prompts/choosing-a-model.md; all are OpenRouter ids.
+  #
+  # EVAL_PROVIDER=openrouter routes the Claude Code CLI at OpenRouter's Anthropic-shaped
+  # endpoint. Set it to `anthropic` to run against Anthropic directly with the models that
+  # the gate thresholds were actually calibrated on.
+  EVAL_PROVIDER: openrouter
+  # Measured on one security case against the Opus baseline in history/, not chosen from
+  # the price table. deepseek/deepseek-v4-pro — the repo guide's recommended cheap upgrade
+  # — was tried first and rejected: 3 of 6 executor runs ended their turn without ever
+  # calling Write, on both arms, once after 17 tool calls. A ~50% no-op rate cannot carry
+  # a 24-run job, and because it lands more often on the unstructured baseline it inflates
+  # the delta in the skill's favour. haiku-4.5 reproduced Opus exactly on that case
+  # (4/4 vs 3/4, delta +0.25) at 28s per run against Opus's 145s, with no retries.
+  EVAL_MODEL: anthropic/claude-haiku-4.5
+  # The general check that fires when a CLAUDE.md changes runs on Gemini. It drives the
+  # tool loop correctly, but costs ~574k tokens and 158s per run here against haiku's 59k
+  # and 28s — prompt caching does not appear to survive this route. Acceptable for a check
+  # that fires rarely and runs one case; reconsider if the guide suite grows.
+  EVAL_MODEL_GUIDE: google/gemini-3.6-flash
+  # The judge stays on a strong model: it decides pass/fail, and its verdicts are compared
+  # against history graded by Claude. Only the agent-grader suites use it.
+  EVAL_GRADER_MODEL: anthropic/claude-sonnet-4.6
+  # Screening number. The weekly workflow is the one that measures; see skill-evals/README.
+  EVAL_RUNS: '1'
+
+jobs:
+  detect:
+    name: route changed files
+    runs-on: ubuntu-latest
+    # A fork PR gets no secrets, so every run would die at the auth check. It must never
+    # become pull_request_target: this workflow runs an agent with Bash over the PR's own
+    # files, so that would hand a fork's branch the API key.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # plan.mjs appends its own table to $GITHUB_STEP_SUMMARY. Passing it back as a step
+      # output and echoing it would run the backticks in `skill \`zod\`` as a command.
+      - id: plan
+        name: Decide what has evals
+        run: |
+          base="origin/${{ github.event.pull_request.base.ref }}"
+          # --diff-filter=d drops deletions. A removed agent or skill has nothing left to
+          # evaluate, and routing it produces a skip line for a file that no longer exists.
+          git diff --name-only --diff-filter=d "$base"...HEAD | node skill-evals/ci/plan.mjs
+
+  evals:
+    name: ${{ matrix.kind }} ${{ matrix.name }}
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Claude Code CLI
+        run: npm i -g @anthropic-ai/claude-code
+
+      - name: Install harness deps
+        working-directory: skill-evals
+        run: npm ci
+
+      # Resolves the provider into the env the CLI reads, and picks the model for this
+      # row. Doing it in one place keeps the run step free of conditionals.
+      - name: Configure the provider
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "$EVAL_PROVIDER" = "openrouter" ]; then
+            test -n "${OPENROUTER_API_KEY:-}" || { echo "::error::OPENROUTER_API_KEY is not set"; exit 1; }
+            {
+              echo "ANTHROPIC_BASE_URL=https://openrouter.ai/api"
+              echo "ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY"
+              # Must be empty, not unset: the CLI prefers x-api-key over the bearer token.
+              echo "ANTHROPIC_API_KEY="
+              # Required, not tuning. The CLI defaults max_tokens to 32000 for a model id
+              # it does not recognise, and every OpenRouter id is unrecognised. OpenRouter
+              # bills the affordability check against max_tokens rather than actual usage,
+              # so the default makes every request fail with HTTP 402 unless the account
+              # can pre-fund 32000 output tokens. 16000 still fits a full review.
+              echo "CLAUDE_CODE_MAX_OUTPUT_TOKENS=16000"
+            } >> "$GITHUB_ENV"
+          else
+            test -n "${ANTHROPIC_API_KEY:-}" || { echo "::error::ANTHROPIC_API_KEY is not set"; exit 1; }
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$GITHUB_ENV"
+          fi
+          if [ "${{ matrix.kind }}" = "guide" ]; then
+            echo "MODEL=$EVAL_MODEL_GUIDE" >> "$GITHUB_ENV"
+          else
+            echo "MODEL=$EVAL_MODEL" >> "$GITHUB_ENV"
+          fi
+
+      # One token through the real endpoint. Without it, a bad key or a provider that does
+      # not speak the Messages API shows up as N failed reviews instead of one clear error.
+      - name: Check the endpoint answers
+        run: |
+          set -euo pipefail
+          claude --version
+          code=$(curl -sS -o /tmp/probe.json -w '%{http_code}' \
+            -X POST "${ANTHROPIC_BASE_URL:-https://api.anthropic.com}/v1/messages" \
+            -H "Authorization: Bearer ${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY:-}" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "{\"model\":\"$MODEL\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\".\"}]}")
+          [ "$code" = "200" ] || { echo "::error::$MODEL returned HTTP $code"; head -c 400 /tmp/probe.json; exit 1; }
+          echo "$MODEL answers on ${ANTHROPIC_BASE_URL:-api.anthropic.com}"
+
+      - name: Run evals
+        id: run
+        working-directory: skill-evals
+        run: |
+          out="results/pr-${{ github.run_id }}-${{ matrix.name }}"
+
+          # An unset matrix key renders as an empty string, so defaulting belongs in the
+          # shell. Doing it in a GitHub expression would depend on the env context being
+          # readable there, which is not true everywhere in a step.
+          runs="${{ matrix.runs }}"; runs="${runs:-$EVAL_RUNS}"
+          extra=()
+          cases="${{ matrix.cases }}"; [ -n "$cases" ] && extra+=(--cases "$cases")
+
+          set +e
+          npx tsx run.ts \
+            --skill "${{ matrix.dir }}" \
+            --runs "$runs" \
+            --model "$MODEL" \
+            --grader-model "$EVAL_GRADER_MODEL" \
+            "${extra[@]}" \
+            --concurrency 4 \
+            --out "$out"
+          code=$?
+          set -e
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+
+          # Advisory, not blocking. A missing benchmark means the harness never got to a
+          # verdict — a broken runner, a dead endpoint, an unreadable suite — and that is a
+          # real failure. A benchmark plus a non-zero exit means the gates spoke, and on a
+          # single screening run they speak with a lot of variance: report, do not block.
+          if [ ! -f "$out/benchmark.json" ]; then
+            echo "::error::no benchmark produced — the harness failed to run (exit $code)"
+            exit 1
+          fi
+          [ $code -eq 0 ] || echo "::warning::gates failed for ${{ matrix.name }} — advisory on a PR, see the summary"
+
+      - name: Publish the benchmark
+        if: always()
+        working-directory: skill-evals
+        run: |
+          f="${{ steps.run.outputs.out }}/benchmark.md"
+          {
+            echo "## ${{ matrix.kind }} \`${{ matrix.name }}\` — $MODEL"
+            [ -f "$f" ] && cat "$f" || echo "_no benchmark produced_"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The reviews are the evidence behind a gate warning — keep them either way.
+      - name: Upload run output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evals-${{ matrix.kind }}-${{ matrix.name }}-${{ github.run_id }}
+          path: skill-evals/${{ steps.run.outputs.out }}/**
+          if-no-files-found: warn
+          retention-days: 14
