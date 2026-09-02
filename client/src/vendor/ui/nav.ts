@@ -24,6 +24,7 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "pulls", label: "Pull Requests", icon: "GitPullRequest", href: "/repos/:repoId/pulls", gKey: "p" },
       { key: "agents", label: "Agents", icon: "Cpu", href: "/agents", gKey: "a" },
+      { key: "context", label: "Project Context", icon: "FileText", href: "/context" },
     ],
   },
   {
@@ -31,6 +32,11 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "skills", label: "Skills", icon: "Sparkles", href: "/skills", gKey: "s" },
       { key: "conventions", label: "Conventions", icon: "ListChecks", href: "/conventions", gKey: "c" },
+      /* `label` is rendered as a LITERAL by NavItem.tsx — the sidebar copy is not
+         i18n-bound. The parallel `nav.retro` key in messages/en/shell.json is
+         real but feeds only the command palette (useShellCommands.ts). Both are
+         needed; see client/INSIGHTS.md 2026-08-29. */
+      { key: "retro", label: "Retro Ledger", icon: "Clock", href: "/retro" },
     ],
   },
 ];

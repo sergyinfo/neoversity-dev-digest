@@ -130,7 +130,9 @@ export class IntentService {
     }
 
     const refs = parseReferences(pull.body, repoRef);
-    const references = await resolveReferences(refs, {
+    // Only `resolved` is used here: intent passes no `dropWholeItems`, so it
+    // keeps the truncating behaviour, and the skip list stays a log concern.
+    const { resolved: references } = await resolveReferences(refs, {
       repoRef,
       git: this.container.git,
       github,

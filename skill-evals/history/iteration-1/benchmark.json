@@ -1,0 +1,323 @@
+{
+  "metadata": {
+    "skill_name": "security",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-08-29T18:42:07Z",
+    "evals_run": [
+      0,
+      1,
+      2
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 0,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 181.8,
+        "tokens": 20339,
+        "tool_calls": 9,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports MongoDB operator injection in the login query: src/routes/auth.routes.js uses req.body.email directly in User.findOne without a String() cast",
+          "passed": true,
+          "evidence": "Finding 3, HIGH, A05, 'src/routes/auth.routes.js:36' \u2014 quotes the query and gives $ne/$regex payloads plus the String() cast fix."
+        },
+        {
+          "text": "Reports that src/middleware/auth.js verifies the token with jwt.decode() instead of jwt.verify(), so the signature is never checked",
+          "passed": true,
+          "evidence": "Finding 1, CRITICAL, 'src/middleware/auth.js:18' \u2014 'parses base64, verifies NOTHING', with a curl forgery exploit and a jwt.verify fix pinning HS256."
+        },
+        {
+          "text": "Reports the hardcoded fallback JWT secret 'blogapp-dev-secret' in src/middleware/auth.js",
+          "passed": true,
+          "evidence": "Finding 2, CRITICAL, 'src/middleware/auth.js:3' \u2014 quotes the || fallback, notes the silent-fallback failure mode, fix throws at boot."
+        },
+        {
+          "text": "Does not report any of the correct controls as a finding: the String()-cast register handler, the 5/15min login rate limiter, bcrypt cost 12, the generic 'Invalid credentials' message, the toJSON password strip, or the env-var Mongo URI",
+          "passed": true,
+          "evidence": "None of the six appear as findings; all six are listed under 'What this code gets right'. Findings 4-8 are distinct gaps (no limiter on /register, duplicate-email leak, no isActive re-check, deps, trust proxy)."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 8 findings have File: path:line, a severity, an OWASP category, a Confidence label and a code-level Fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 135.7,
+        "tokens": 12738,
+        "tool_calls": 12,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports the missing ownership/admin check in remove(): src/controllers/posts.controller.js calls findByIdAndDelete on any id an authenticated user supplies",
+          "passed": true,
+          "evidence": "Finding 2, HIGH, A01, 'posts.controller.js:68-78' \u2014 contrasts it with the correct check in update() at line 52; fix is load-authorize-delete."
+        },
+        {
+          "text": "Reports mass assignment via Post.create(req.body) in create(), letting a caller set author / isPublished / isFeatured",
+          "passed": true,
+          "evidence": "Finding 3, HIGH, A08, 'posts.controller.js:37-44' \u2014 names author spoofing and forced isPublished/isFeatured, notes strict:true does not help for declared fields."
+        },
+        {
+          "text": "Reports shell command injection in exportPdf(): req.query.template is interpolated into an exec() command string",
+          "passed": true,
+          "evidence": "Finding 1, CRITICAL, A05, 'posts.controller.js:90-102' \u2014 RCE exploit via ?template=, fix is an allowlist plus execFile."
+        },
+        {
+          "text": "Does not claim authentication is missing on the write routes (router.use(requireAuth) is present), that update() lacks an ownership check, or that list() is unbounded",
+          "passed": true,
+          "evidence": "All three are explicitly credited under 'Verified as sound': the router.use barrier, update()'s ownership check, and list() being bounded by .limit(PAGE_SIZE)."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 6 findings have File: path:line-range, severity, OWASP category, a Data flow paragraph and a code Fix."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 104.0,
+        "tokens": 11529,
+        "tool_calls": 7,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports the unsanitized dangerouslySetInnerHTML={{ __html: post.body }} in client/src/components/PostView.jsx as stored XSS and recommends sanitization",
+          "passed": true,
+          "evidence": "Finding 1, HIGH, A05, 'PostView.jsx:41-44' \u2014 traces post.body from getPost(), gives an img/onerror payload, fixes with a DOMPurify allowlist."
+        },
+        {
+          "text": "Reports the CORS misconfiguration in server/src/app.js: origin: true reflects any origin while credentials: true is set",
+          "passed": true,
+          "evidence": "Finding 3, HIGH, A02, 'app.js:16-21' \u2014 explains origin reflection + ACAC:true, ties it to the client's credentials:'include', fixes with an allowlist callback."
+        },
+        {
+          "text": "Reports that href={post.author.website} in PostView.jsx is not protocol-validated, allowing a javascript: URL",
+          "passed": true,
+          "evidence": "Finding 2, HIGH, A05, 'PostView.jsx:34-38' \u2014 javascript: payload, notes rel=noreferrer already covers tabnabbing, fixes with a URL protocol allowlist."
+        },
+        {
+          "text": "Does not report VITE_API_URL as a leaked secret, does not flag plain JSX interpolation such as {post.title} or {comment.body} as XSS, and does not flag the NODE_ENV-gated stack trace as a production leak",
+          "passed": true,
+          "evidence": "All three are in the 'Verified-safe (checked, deliberately not reported)' section, including 'a base API URL is not a secret' and 'gates err.message/err.stack behind NODE_ENV === development. Correct fail-safe shape; no stack-trace leak in production.'"
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 3 findings carry Severity, Confidence, OWASP, File: path:line-range, a Data flow section, an exploit and a code Fix."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 0,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 182.7,
+        "tokens": 23713,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports MongoDB operator injection in the login query: src/routes/auth.routes.js uses req.body.email directly in User.findOne without a String() cast",
+          "passed": true,
+          "evidence": "H2, High, 'src/routes/auth.routes.js:36' \u2014 'interpolated into the query without type coercion', $ne/$regex/$gt payloads, typeof-check fix."
+        },
+        {
+          "text": "Reports that src/middleware/auth.js verifies the token with jwt.decode() instead of jwt.verify(), so the signature is never checked",
+          "passed": true,
+          "evidence": "C1, Critical, 'src/middleware/auth.js:18' \u2014 'does not check the signature', three named impacts, jwt.verify fix with pinned algorithms."
+        },
+        {
+          "text": "Reports the hardcoded fallback JWT secret 'blogapp-dev-secret' in src/middleware/auth.js",
+          "passed": true,
+          "evidence": "H1, High, 'src/middleware/auth.js:3' \u2014 quotes the fallback, notes it stays exploitable after C1 is fixed."
+        },
+        {
+          "text": "Does not report any of the correct controls as a finding: the String()-cast register handler, the 5/15min login rate limiter, bcrypt cost 12, the generic 'Invalid credentials' message, the toJSON password strip, or the env-var Mongo URI",
+          "passed": true,
+          "evidence": "All six are credited under 'What the code gets right'. M2/M4/M5 raise adjacent but distinct points (proxy trust for the limiter, over-wide register response, email format) without claiming the correct controls are absent."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 15 findings carry a Location: file:line, a severity in the summary table, and a Fix paragraph or code block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 134.6,
+        "tokens": 14944,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports the missing ownership/admin check in remove(): src/controllers/posts.controller.js calls findByIdAndDelete on any id an authenticated user supplies",
+          "passed": true,
+          "evidence": "C2, Critical, 'posts.controller.js:68-78' \u2014 'any user holding any valid JWT can delete every post'; fix mirrors update()."
+        },
+        {
+          "text": "Reports mass assignment via Post.create(req.body) in create(), letting a caller set author / isPublished / isFeatured",
+          "passed": true,
+          "evidence": "H1, High, 'posts.controller.js:37-44' \u2014 enumerates author / isPublished / isFeatured / status as client-writable; allowlist fix."
+        },
+        {
+          "text": "Reports shell command injection in exportPdf(): req.query.template is interpolated into an exec() command string",
+          "passed": true,
+          "evidence": "C1, Critical, 'posts.controller.js:90-102' \u2014 RCE via ?template=, plus the qs array/object variant; execFile + allowlist fix."
+        },
+        {
+          "text": "Does not claim authentication is missing on the write routes (router.use(requireAuth) is present), that update() lacks an ownership check, or that list() is unbounded",
+          "passed": true,
+          "evidence": "It cites router.use(requireAuth) at routes line 11 as present and credits update()'s check as correct. L1 raises negative-page clamping, which is a distinct issue from unbounded pagination."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 13 findings carry file:line in the summary table and a Fix; the Low items are shorter but still cite lines and a remedy."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 129.3,
+        "tokens": 16556,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Reports the unsanitized dangerouslySetInnerHTML={{ __html: post.body }} in client/src/components/PostView.jsx as stored XSS and recommends sanitization",
+          "passed": true,
+          "evidence": "Finding 1, Critical, 'PostView.jsx:41-44' \u2014 event-handler payloads, three ranked fixes starting with not storing HTML, DOMPurify code included."
+        },
+        {
+          "text": "Reports the CORS misconfiguration in server/src/app.js: origin: true reflects any origin while credentials: true is set",
+          "passed": true,
+          "evidence": "Finding 2, High, 'app.js:16-21' \u2014 'an origin allowlist of everyone', arbitrary cross-origin credentialed reads, allowlist-callback fix."
+        },
+        {
+          "text": "Reports that href={post.author.website} in PostView.jsx is not protocol-validated, allowing a javascript: URL",
+          "passed": true,
+          "evidence": "Finding 3, High, 'PostView.jsx:34-38' \u2014 notes React 16.9+ warns but still renders javascript: URLs; safeHttpUrl() fix."
+        },
+        {
+          "text": "Does not report VITE_API_URL as a leaked secret, does not flag plain JSX interpolation such as {post.title} or {comment.body} as XSS, and does not flag the NODE_ENV-gated stack trace as a production leak",
+          "passed": true,
+          "evidence": "VITE_API_URL is never mentioned as a secret; CommentList's JSX interpolation is credited as 'the correct, auto-escaping pattern'. Finding 7 discusses the NODE_ENV gate but states it 'is the safe direction (an unset NODE_ENV discloses nothing)' and raises staging misconfiguration instead \u2014 it does not claim a production leak."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 9 findings carry file:line in the summary table plus a Fix section with code where applicable."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 140.5,
+        "stddev": 39.1215,
+        "min": 104.0,
+        "max": 181.8
+      },
+      "tokens": {
+        "mean": 14868.6667,
+        "stddev": 4775.8591,
+        "min": 11529,
+        "max": 20339
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 148.8667,
+        "stddev": 29.4201,
+        "min": 129.3,
+        "max": 182.7
+      },
+      "tokens": {
+        "mean": 18404.3333,
+        "stddev": 4667.5574,
+        "min": 14944,
+        "max": 23713
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.00",
+      "time_seconds": "-8.4",
+      "tokens": "-3536"
+    }
+  },
+  "notes": []
+}

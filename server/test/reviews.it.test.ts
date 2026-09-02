@@ -8,6 +8,11 @@ import { MockLLMProvider, MockEmbedder, MockGitClient } from '../src/adapters/mo
 import * as t from '../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { Review } from '@devdigest/shared';
+import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Projection } from '../src/modules/project-context/contract.js';
+import { PROJECT_CONTEXT_TOKEN_BUDGET } from '../src/modules/project-context/constants.js';
 
 const hasDocker = await dockerAvailable();
 const d = hasDocker ? describe : describe.skip;
@@ -61,11 +66,51 @@ const REVIEW_FIXTURE: Review = {
 };
 
 let repoSeq = 0;
-async function setupRepoAndPr(db: PgFixture['handle']['db'], workspaceId: string) {
+/**
+ * The AC-26 summary line the run records, located by a matcher that CANNOT
+ * match anything else on that channel (fix-brief F7).
+ *
+ * `run-executor` emits three kinds of `project context:` line, and the previous
+ * matcher — `startsWith('project context:') && includes('tokens')` — matched two
+ * of them:
+ *
+ *   project context: skipped <path> — <reason>
+ *   project context: dropped <path> — dropped for budget (8000 tokens)   ← also matched
+ *   project context: <n> document(s), ~<t> tokens                        ← the one wanted
+ *
+ * Drops are logged FIRST (`run-executor.ts:299` before `:314`), so in any run
+ * with a drop the old matcher returned the drop line, `/~(\d+) tokens/` found no
+ * `~` in it, and `.exec(...)![1]` threw a TypeError — a crash where an assertion
+ * was intended. It passed only because the two tests using it happened to have
+ * no drops; the AC-27 budget test, which does, never asserted the number at all.
+ *
+ * Anchored on both ends against the exact summary format, and the absence of a
+ * match is an ASSERTION here rather than a `!` waiting to throw.
+ */
+const PROJECT_CONTEXT_SUMMARY = /^project context: (\d+) document\(s\), ~(\d+) tokens$/;
+
+function projectContextTokens(trace: { log: { msg: string }[] }): number {
+  const matches = trace.log
+    .map((l) => PROJECT_CONTEXT_SUMMARY.exec(l.msg))
+    .filter((m): m is RegExpExecArray => m !== null);
+  expect(
+    matches,
+    `no "project context: N document(s), ~T tokens" line in the run trace; saw ${JSON.stringify(
+      trace.log.filter((l) => l.msg.startsWith('project context')).map((l) => l.msg),
+    )}`,
+  ).toHaveLength(1);
+  return Number(matches[0]![2]);
+}
+
+async function setupRepoAndPr(
+  db: PgFixture['handle']['db'],
+  workspaceId: string,
+  clonePath: string | null = null,
+) {
   const name = `payments-api-${repoSeq++}`;
   const [repo] = await db
     .insert(t.repos)
-    .values({ workspaceId, owner: 'acme', name, fullName: `acme/${name}` })
+    .values({ workspaceId, owner: 'acme', name, fullName: `acme/${name}`, clonePath })
     .returning();
   const [pr] = await db
     .insert(t.pullRequests)
@@ -376,6 +421,489 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     expect(JSON.stringify(mock.calls)).not.toContain('breaking-change');
 
     await app.close();
+  });
+
+
+  /**
+   * L05 — Project Context reaches the model, the trace and the run log.
+   *
+   * Two assertion mechanics are load-bearing here and both cost a debugging
+   * cycle if got wrong:
+   *
+   *  - `JSON.stringify(mock.calls)` ESCAPES quotes, so
+   *    `.toContain('<untrusted source="spec-0">')` can never match — it is
+   *    stored as `source=\"spec-0\"` and the failure reads like a missing
+   *    prompt section (`server/INSIGHTS.md`, 2026-08-28). Delimiter assertions
+   *    therefore go against `trace.prompt_assembly.user`.
+   *  - `waitForTrace`, never `waitForPrRuns` alone, before touching
+   *    `prompt_assembly` (`server/INSIGHTS.md`, 2026-08-17).
+   */
+  describe('L05 project context', () => {
+    const DOC_A = '# Pricing spec\n\nCharges are cost-plus-14pct. Never round up.\n';
+    const DOC_B = '# Retention spec\n\nDeletion is soft for 30 days.\n';
+
+    let base: string;
+    let clone: string;
+
+    beforeAll(async () => {
+      base = await realpath(await mkdtemp(join(tmpdir(), 'ctx-run-')));
+      clone = join(base, 'clone');
+      await mkdir(join(clone, 'docs'), { recursive: true });
+      await writeFile(join(clone, 'docs', 'a.md'), DOC_A);
+      await writeFile(join(clone, 'docs', 'b.md'), DOC_B);
+    });
+    afterAll(async () => {
+      if (base) await rm(base, { recursive: true, force: true });
+    });
+
+    type Trace = {
+      prompt_assembly: { specs: string | null; user: string };
+      specs_read: string[];
+      log: Array<{ msg: string }>;
+    };
+
+    function appWithMock(mock: MockLLMProvider) {
+      return buildApp({
+        config: config(),
+        db: pg.handle.db,
+        overrides: {
+          embedder: new MockEmbedder(),
+          git: new MockGitClient({ diff: DIFF }),
+          llm: { openai: mock },
+        },
+      });
+    }
+
+    const newAgent = async (app: Awaited<ReturnType<typeof buildApp>>, name: string) =>
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/agents',
+          payload: { name, provider: 'openai', model: 'gpt-4.1', system_prompt: 'base' },
+        })
+      ).json() as { id: string };
+
+    const attach = (
+      app: Awaited<ReturnType<typeof buildApp>>,
+      payload: Record<string, unknown>,
+    ) => app.inject({ method: 'POST', url: '/context/attachments', payload });
+
+    async function runAndTrace(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      prId: string,
+      agentId: string,
+      expected: number,
+    ): Promise<Trace> {
+      const body = (
+        await app.inject({
+          method: 'POST',
+          url: `/pulls/${prId}/review`,
+          payload: { agentId },
+        })
+      ).json();
+      await waitForPrRuns(pg.handle.db, prId, { expected });
+      return waitForTrace<Trace>(app, body.runs[0].run_id);
+    }
+
+    it('AC-18 / AC-19 — one attachment renders the section; removing it restores a byte-identical prompt', async () => {
+      const mock = new MockLLMProvider('openai', { structured: REVIEW_FIXTURE });
+      const app = await appWithMock(mock);
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'CtxAgent');
+
+      // ---- AC-19 baseline: no attachments -----------------------------------
+      const before = await runAndTrace(app, pr.id, agent.id, 1);
+      expect(before.prompt_assembly.specs).toBeNull();
+      expect(before.specs_read).toEqual([]);
+      expect(before.prompt_assembly.user).not.toContain('## Project context');
+
+      // ---- AC-18: attach one document ---------------------------------------
+      const created = await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      expect(created.statusCode).toBe(201);
+
+      const after = await runAndTrace(app, pr.id, agent.id, 2);
+      expect(after.prompt_assembly.specs).not.toBeNull();
+      expect(after.prompt_assembly.user).toContain('## Project context');
+      expect(after.prompt_assembly.user).toContain('<untrusted source="spec-0">');
+      expect(after.prompt_assembly.user).toContain('cost-plus-14pct');
+      expect(after.specs_read).toEqual(['docs/a.md']);
+      // The text really reached the MODEL, not merely the trace.
+      expect(JSON.stringify(mock.calls)).toContain('cost-plus-14pct');
+
+      // ---- AC-19 proper: detach, and the prompt returns to the baseline ------
+      await app.inject({
+        method: 'DELETE',
+        url: `/context/attachments/${created.json().id}`,
+      });
+      const restored = await runAndTrace(app, pr.id, agent.id, 3);
+      // BYTE-identical, not merely "no section": this is the regression bar.
+      expect(restored.prompt_assembly.user).toBe(before.prompt_assembly.user);
+      expect(restored.prompt_assembly.specs).toBeNull();
+      expect(restored.specs_read).toEqual([]);
+
+      await app.close();
+    });
+
+    it('AC-11 / AC-12 — a skill-attached document reaches the agent only while the skill is enabled', async () => {
+      const mock = new MockLLMProvider('openai', { structured: REVIEW_FIXTURE });
+      const app = await appWithMock(mock);
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'InheritAgent');
+
+      const [skill] = await pg.handle.db
+        .insert(t.skills)
+        .values({
+          workspaceId,
+          name: `ctx-skill-${repoSeq}`,
+          description: 'd',
+          type: 'convention',
+          source: 'manual',
+          body: 'skill body',
+        })
+        .returning();
+      await app.inject({
+        method: 'POST',
+        url: `/agents/${agent.id}/skills`,
+        payload: { skill_id: skill!.id },
+      });
+      await attach(app, {
+        path: 'docs/b.md',
+        repo_id: repo.id,
+        target_kind: 'skill',
+        target_id: skill!.id,
+      });
+
+      const enabled = await runAndTrace(app, pr.id, agent.id, 1);
+      expect(enabled.prompt_assembly.user).toContain('Deletion is soft for 30 days');
+      expect(enabled.specs_read).toEqual(['docs/b.md']);
+
+      // AC-12 — disabling the skill removes its document, and the run is
+      // otherwise unaffected. The filter is in SQL, so no caller can forget it.
+      await pg.handle.db.update(t.skills).set({ enabled: false }).where(eq(t.skills.id, skill!.id));
+      mock.calls.length = 0;
+
+      const disabled = await runAndTrace(app, pr.id, agent.id, 2);
+      expect(disabled.prompt_assembly.specs).toBeNull();
+      expect(disabled.specs_read).toEqual([]);
+      expect(JSON.stringify(mock.calls)).not.toContain('Deletion is soft');
+      // The review still happened.
+      expect(disabled.prompt_assembly.user).toContain('## Diff to review');
+
+      await app.close();
+    });
+
+    it('AC-10 — changing the attachment order changes the injection order', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'OrderedAgent');
+
+      const first = (
+        await attach(app, {
+          path: 'docs/a.md',
+          repo_id: repo.id,
+          target_kind: 'agent',
+          target_id: agent.id,
+        })
+      ).json();
+      await attach(app, {
+        path: 'docs/b.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+
+      const before = await runAndTrace(app, pr.id, agent.id, 1);
+      expect(before.specs_read).toEqual(['docs/a.md', 'docs/b.md']);
+      expect(before.prompt_assembly.user.indexOf('cost-plus-14pct')).toBeLessThan(
+        before.prompt_assembly.user.indexOf('Deletion is soft'),
+      );
+
+      // Move the first document to the end.
+      await app.inject({
+        method: 'PATCH',
+        url: `/context/attachments/${first.id}`,
+        payload: { order: 99 },
+      });
+
+      const after = await runAndTrace(app, pr.id, agent.id, 2);
+      expect(after.specs_read).toEqual(['docs/b.md', 'docs/a.md']);
+      expect(after.prompt_assembly.user.indexOf('Deletion is soft')).toBeLessThan(
+        after.prompt_assembly.user.indexOf('cost-plus-14pct'),
+      );
+
+      await app.close();
+    });
+
+    it('AC-20 / AC-23 — a document deleted from the clone is skipped, recorded and logged; the run completes', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'DeletedDocAgent');
+
+      // A document that exists at attach time and is gone by run time — the
+      // TOCTOU the containment gate has to survive, arriving benignly.
+      await writeFile(join(clone, 'docs', 'temp.md'), '# Temp\n\nabout to vanish.\n');
+      await attach(app, {
+        path: 'docs/temp.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      await rm(join(clone, 'docs', 'temp.md'), { force: true });
+
+      const trace = await runAndTrace(app, pr.id, agent.id, 1);
+
+      // The run completed normally and the surviving document is still injected.
+      const [run] = await pg.handle.db.select().from(t.agentRuns).where(eq(t.agentRuns.prId, pr.id));
+      expect(run!.status).toBe('done');
+      expect(trace.prompt_assembly.user).toContain('cost-plus-14pct');
+
+      // AC-23 — the trace names the missing document AND a reason.
+      expect(trace.specs_read).toHaveLength(2);
+      const missing = trace.specs_read.find((s) => s.startsWith('docs/temp.md'))!;
+      expect(missing).toContain('docs/temp.md');
+      expect(missing.length).toBeGreaterThan('docs/temp.md'.length);
+      expect(trace.specs_read).toContain('docs/a.md');
+
+      // ...and the run log has a line naming it, carrying no document text.
+      const line = trace.log.find((l) => l.msg.includes('docs/temp.md'));
+      expect(line).toBeDefined();
+      expect(line!.msg).toContain('project context: skipped');
+      expect(JSON.stringify(trace.log)).not.toContain('about to vanish');
+
+      await app.close();
+    });
+
+    it('AC-21 — a cross-repo document is skipped, and no same-named file from the repo under review is read', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+
+      // Two clones, each with `docs/a.md`, holding DIFFERENT text.
+      const otherClone = join(base, 'other-clone');
+      await mkdir(join(otherClone, 'docs'), { recursive: true });
+      await writeFile(join(otherClone, 'docs', 'a.md'), '# Other repo\n\nSAME NAME DIFFERENT PROJECT\n');
+
+      const other = await setupRepoAndPr(pg.handle.db, workspaceId, otherClone);
+      const under = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'CrossRepoAgent');
+
+      // Attached against the OTHER repo, then run against a PR in this one.
+      await attach(app, {
+        path: 'docs/a.md',
+        repo_id: other.repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+
+      const trace = await runAndTrace(app, under.pr.id, agent.id, 1);
+
+      expect(trace.prompt_assembly.specs).toBeNull();
+      // Neither project's text is in the prompt: not the other repo's (it is a
+      // different repository) and NOT this repo's same-named file (silent
+      // same-name resolution is exactly what D-6 forbids).
+      expect(trace.prompt_assembly.user).not.toContain('SAME NAME DIFFERENT PROJECT');
+      expect(trace.prompt_assembly.user).not.toContain('cost-plus-14pct');
+      expect(trace.specs_read).toHaveLength(1);
+      expect(trace.specs_read[0]).toContain('docs/a.md');
+      expect(trace.specs_read[0]).toContain('different repository');
+
+      await app.close();
+    });
+
+    it('AC-22 / AC-27 — over budget, whole documents are dropped from the end and each is recorded', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'BudgetAgent');
+
+      // Two documents whose combined estimate exceeds the 8 000-token section
+      // budget under the REAL tokenizer (~1 token per 4 chars for this text).
+      await mkdir(join(clone, 'docs', 'budget'), { recursive: true });
+      const filler = 'alpha beta gamma delta epsilon zeta eta theta iota kappa\n';
+      await writeFile(join(clone, 'docs', 'budget', 'one.md'), filler.repeat(500));
+      await writeFile(join(clone, 'docs', 'budget', 'two.md'), filler.repeat(500));
+
+      for (const path of ['docs/budget/one.md', 'docs/budget/two.md']) {
+        await attach(app, { path, repo_id: repo.id, target_kind: 'agent', target_id: agent.id });
+      }
+
+      // AC-27's first half: the page marks the drop BEFORE any run.
+      const projection = Projection.parse(
+        (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
+      );
+      const markedDropped = projection.entries
+        .filter((e) => e.outcome === 'dropped_budget')
+        .map((e) => e.path);
+      expect(markedDropped).toEqual(['docs/budget/two.md']);
+      expect(projection.projected_tokens).toBeLessThanOrEqual(PROJECT_CONTEXT_TOKEN_BUDGET);
+
+      const trace = await runAndTrace(app, pr.id, agent.id, 1);
+
+      // Whole documents only — no truncation marker, and the survivor is intact.
+      expect(trace.prompt_assembly.specs).toContain('alpha beta gamma');
+      expect(trace.specs_read[0]).toBe('docs/budget/one.md');
+      const droppedLine = trace.specs_read[1]!;
+      expect(droppedLine).toContain('docs/budget/two.md');
+      expect(droppedLine).toContain('budget');
+
+      // AC-27's second half: the marked set IS the set the run dropped.
+      const runDropped = trace.specs_read
+        .filter((s) => s.includes('budget (') || s.includes('dropped for budget'))
+        .map((s) => s.split(' — ')[0]);
+      expect(runDropped).toEqual(markedDropped);
+
+      // AC-26's number, asserted in the one run that actually DROPS (F7). The
+      // drop line is logged before the summary and used to satisfy the old
+      // matcher, so this is the case that was silently unassertable.
+      expect(trace.log.some((l) => l.msg.startsWith('project context: dropped'))).toBe(true);
+      expect(projectContextTokens(trace)).toBe(projection.projected_tokens);
+
+      await rm(join(clone, 'docs', 'budget'), { recursive: true, force: true });
+      await app.close();
+    });
+
+    it('AC-26 — the projected total equals the section size the run records (BQ-1/a)', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'AgreementAgent');
+
+      for (const path of ['docs/a.md', 'docs/b.md']) {
+        await attach(app, { path, repo_id: repo.id, target_kind: 'agent', target_id: agent.id });
+      }
+
+      const projection = Projection.parse(
+        (await app.inject({ method: 'GET', url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}` })).json(),
+      );
+      expect(projection.projected_tokens).toBeGreaterThan(0);
+
+      const trace = await runAndTrace(app, pr.id, agent.id, 1);
+
+      // The run records `sectionTokens` on a run-log line precisely so this
+      // equality has a recorded value to assert against — the existing
+      // prompt-assembly stat counts `assembly.specs` WITHOUT the heading and
+      // therefore can never equal a projection that includes it.
+      expect(projectContextTokens(trace)).toBe(projection.projected_tokens);
+
+      await app.close();
+    });
+
+    /**
+     * Fix-brief F2 — the projection and the run must agree for a MULTI-REPO
+     * agent, which is the one case the old projection could not get right: it
+     * passed each attachment its own repo id as the repo under review, so the
+     * cross-repo guard compared `x !== x` and never fired. The page promised to
+     * inject a document the run skips.
+     *
+     * This asserts the two agree on BOTH halves AC-26 names — the same per
+     * document outcome, and the same `sectionTokens`.
+     */
+    it('F2 — a multi-repo agent`s projection and run produce the same outcomes and the same sectionTokens', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+
+      const otherClone = join(base, 'f2-other-clone');
+      await mkdir(join(otherClone, 'docs'), { recursive: true });
+      await writeFile(
+        join(otherClone, 'docs', 'other.md'),
+        '# Other repo\n\nBELONGS TO A DIFFERENT PROJECT\n',
+      );
+
+      const other = await setupRepoAndPr(pg.handle.db, workspaceId, otherClone);
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'MultiRepoAgreementAgent');
+
+      // One document from the repo under review, one from another repo. Both
+      // exist on disk and are readable, so the only thing that can distinguish
+      // them is which repository they were attached against.
+      await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      await attach(app, {
+        path: 'docs/other.md',
+        repo_id: other.repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+
+      const projection = Projection.parse(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/agents/${agent.id}/context/projection?repo_id=${repo.id}`,
+          })
+        ).json(),
+      );
+
+      // The page's half: the foreign document is marked `skipped`, which is the
+      // "wrong repo" cause `ProjectionOutcome.skipped` documents and which the
+      // projection previously could not emit at all.
+      expect(projection.entries.map((e) => [e.path, e.outcome])).toEqual([
+        ['docs/a.md', 'injected'],
+        ['docs/other.md', 'skipped'],
+      ]);
+
+      const trace = await runAndTrace(app, pr.id, agent.id, 1);
+
+      // The run's half: same two documents, same two outcomes.
+      expect(trace.specs_read).toHaveLength(2);
+      expect(trace.specs_read[0]).toBe('docs/a.md');
+      expect(trace.specs_read[1]).toContain('docs/other.md');
+      expect(trace.specs_read[1]).toContain('different repository');
+
+      // Neither the foreign document nor any same-named local file reached the
+      // model — the delimiter assertion goes against `user`, because
+      // `JSON.stringify` of the calls escapes the quotes.
+      expect(trace.prompt_assembly.user).toContain('cost-plus-14pct');
+      expect(trace.prompt_assembly.user).not.toContain('BELONGS TO A DIFFERENT PROJECT');
+
+      // AC-26's number, for the multi-repo shape: the projected total is the
+      // section size the run recorded.
+      expect(projectContextTokens(trace)).toBe(projection.projected_tokens);
+
+      await app.close();
+    });
+
+    it('F3 — a deleted clone skips every document and the run still completes', async () => {
+      const app = await appWithMock(new MockLLMProvider('openai', { structured: REVIEW_FIXTURE }));
+      const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId, clone);
+      const agent = await newAgent(app, 'GoneCloneAgent');
+
+      await attach(app, {
+        path: 'docs/a.md',
+        repo_id: repo.id,
+        target_kind: 'agent',
+        target_id: agent.id,
+      });
+      // The clone disappears between attach and run — a `realpath` that throws
+      // must not surface as a failed run, let alone a 500.
+      await pg.handle.db
+        .update(t.repos)
+        .set({ clonePath: join(base, 'vanished') })
+        .where(eq(t.repos.id, repo.id));
+
+      const trace = await runAndTrace(app, pr.id, agent.id, 1);
+
+      const [run] = await pg.handle.db.select().from(t.agentRuns).where(eq(t.agentRuns.prId, pr.id));
+      expect(run!.status).toBe('done');
+      expect(trace.prompt_assembly.specs).toBeNull();
+      expect(trace.prompt_assembly.user).not.toContain('## Project context');
+      // Every document is recorded as skipped, per §6's "Every attached
+      // document fails" row — not silently dropped.
+      expect(trace.specs_read).toHaveLength(1);
+      expect(trace.specs_read[0]).toContain('clone directory is missing');
+
+      await app.close();
+    });
   });
 
   it('run all enabled agents reviews with each enabled agent', async () => {

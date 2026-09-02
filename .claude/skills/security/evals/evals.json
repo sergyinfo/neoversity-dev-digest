@@ -1,0 +1,220 @@
+{
+  "skill_name": "security",
+  "description": "Does the security skill change what a review finds, or only what it reports?",
+  "reviewKind": "security",
+  "notes": "skill-creator reads skill_name/evals[].{id,prompt,expected_output,files,expectations}. The tier/plants/decoys/gates fields are extra and are what skill-evals/run.ts grades on; skill-creator ignores them.",
+  "tiers": {
+    "textbook": "Iteration-1 corpus. Plants are canonical OWASP patterns recognisable on sight. Kept because they are still valid cases, but both arms score 100% on them \u2014 not run by default.",
+    "data-flow": "Iterations 2-3. Every plant needs a data flow traced across a helper or a second file, and every decoy is code that looks vulnerable and is correct. The gates are calibrated on this tier."
+  },
+  "gates": {
+    "withSkillRecall": 1.0,
+    "withSkillLowDiscipline": 1.0,
+    "minPassRateDelta": 0.15
+  },
+  "evals": [
+    {
+      "id": "auth-jwt-mongo",
+      "tier": "textbook",
+      "prompt": "I'm about to ship the auth service for our blog app. Can you do a security review of the code in that directory and write up what you find?",
+      "expected_output": "Reports the NoSQL operator injection in the login query, jwt.decode() in place of jwt.verify(), and the hardcoded JWT secret fallback \u2014 without flagging the correct register handler, rate limiter, bcrypt cost or env-var Mongo URI.",
+      "files": [
+        "evals/files/case-1-auth"
+      ],
+      "expectations": [
+        "Reports MongoDB operator injection: req.body.email reaches User.findOne with no String() cast",
+        "Reports jwt.decode() used instead of jwt.verify(), so the signature is never checked",
+        "Reports the hardcoded fallback JWT secret"
+      ],
+      "plants": [
+        {
+          "id": "operator-injection",
+          "pattern": "req\\.body\\.email"
+        },
+        {
+          "id": "unverified-jwt",
+          "pattern": "jwt\\.decode"
+        },
+        {
+          "id": "hardcoded-secret",
+          "pattern": "blogapp-dev-secret|fallback (jwt )?secret|hardcoded.{0,20}secret"
+        }
+      ],
+      "decoys": [
+        "bcrypt.{0,25}(cost|round|12)",
+        "loginLimiter",
+        "toJSON",
+        "MONGODB_URI"
+      ]
+    },
+    {
+      "id": "posts-crud-access-control",
+      "tier": "textbook",
+      "prompt": "Security pass on the posts API in that directory before I open the PR, please.",
+      "expected_output": "Reports the missing ownership check on delete, the mass assignment via Post.create(req.body), and the shell command injection in the PDF export \u2014 without claiming auth or pagination bounds are missing.",
+      "files": [
+        "evals/files/case-2-posts"
+      ],
+      "expectations": [
+        "Reports the missing ownership/admin check on delete (IDOR)",
+        "Reports mass assignment via Post.create(req.body)",
+        "Reports shell command injection in the PDF export"
+      ],
+      "plants": [
+        {
+          "id": "idor-delete",
+          "pattern": "findByIdAndDelete"
+        },
+        {
+          "id": "mass-assignment",
+          "pattern": "Post\\.create\\(req\\.body\\)|mass.assignment"
+        },
+        {
+          "id": "command-injection",
+          "pattern": "wkhtmltopdf|exec\\("
+        }
+      ],
+      "decoys": [
+        "router\\.use\\(requireAuth\\)",
+        "execFile",
+        "buildThumbnail"
+      ]
+    },
+    {
+      "id": "react-render-and-app-config",
+      "tier": "textbook",
+      "prompt": "Review that directory for security problems \u2014 it's the React post page plus the Express app config.",
+      "expected_output": "Reports the unsanitized dangerouslySetInnerHTML, the reflect-any-origin CORS with credentials, and the unvalidated href allowing javascript: URLs \u2014 without flagging VITE_API_URL or plain JSX interpolation.",
+      "files": [
+        "evals/files/case-3-frontend"
+      ],
+      "expectations": [
+        "Reports the unsanitized dangerouslySetInnerHTML on the post body",
+        "Reports CORS origin: true combined with credentials: true",
+        "Reports the unvalidated href allowing a javascript: URL"
+      ],
+      "plants": [
+        {
+          "id": "stored-xss",
+          "pattern": "dangerouslySetInnerHTML"
+        },
+        {
+          "id": "cors-reflect-any-origin",
+          "pattern": "origin: ?true"
+        },
+        {
+          "id": "javascript-url",
+          "pattern": "author\\.website|javascript:"
+        }
+      ],
+      "decoys": [
+        "CommentList",
+        "VITE_API_URL",
+        "encodeURIComponent"
+      ]
+    },
+    {
+      "id": "account-service-flows",
+      "tier": "data-flow",
+      "prompt": "Security review of the account service in that directory before we ship it.",
+      "expected_output": "Reports the normalizeIdentifier passthrough enabling operator injection on login, the missing returns making requireAuth fail open, and PATCH /me picking ALLOWED_PROFILE_FIELDS \u2014 without flagging the boot-time secret assert, the hashed password-reset flow, or findById on a route param.",
+      "files": [
+        "evals/files/case-4-account-service"
+      ],
+      "expectations": [
+        "Reports that normalizeIdentifier returns non-string values unchanged, so login passes an attacker-supplied object into User.findOne",
+        "Reports that requireAuth calls next() unconditionally \u2014 neither the missing-token branch nor the catch returns",
+        "Reports that PATCH /me picks ALLOWED_PROFILE_FIELDS, which spreads in role and isActive"
+      ],
+      "plants": [
+        {
+          "id": "operator-injection",
+          "pattern": "normalizeIdentifier"
+        },
+        {
+          "id": "fail-open-auth",
+          "pattern": "(no `?return`?|never returns|unconditional|fail[- ]open)"
+        },
+        {
+          "id": "privilege-escalation",
+          "pattern": "ALLOWED_PROFILE_FIELDS"
+        }
+      ],
+      "decoys": [
+        "env\\.js",
+        "select: ?false",
+        "tokenHash",
+        "SHA-?256",
+        "requireRole"
+      ]
+    },
+    {
+      "id": "posts-search-export-flows",
+      "tier": "data-flow",
+      "prompt": "Can you do a security pass on the posts service in that directory before I open the PR?",
+      "expected_output": "Reports the command injection reaching renderTemplate from exportBranded only, the ownership check comparing against req.body.authorId, and the unescaped RegExp built from the search query \u2014 without claiming create/remove/pagination/id-validation are broken.",
+      "files": [
+        "evals/files/case-5-posts-search-export"
+      ],
+      "expectations": [
+        "Reports command injection: exportBranded passes req.query.template into renderTemplate, which interpolates it into an exec() shell string",
+        "Reports that the ownership check in update() compares against req.body.authorId instead of req.user.userId",
+        "Reports that buildFilter builds a RegExp from the unescaped search query"
+      ],
+      "plants": [
+        {
+          "id": "command-injection",
+          "pattern": "render\\.js|wkhtmltopdf"
+        },
+        {
+          "id": "vacuous-ownership-check",
+          "pattern": "req\\.body\\.authorId"
+        },
+        {
+          "id": "regex-injection",
+          "pattern": "RegExp"
+        }
+      ],
+      "decoys": [
+        "\\bremove\\(\\)",
+        "findOneAndDelete",
+        "pageOf",
+        "isValidObjectId"
+      ]
+    },
+    {
+      "id": "post-page-sanitizer-and-cors",
+      "tier": "data-flow",
+      "prompt": "Review that directory for security problems \u2014 it's the React post page plus the Express app config.",
+      "expected_output": "Reports PostView rendering the raw post.body while the sanitized value is used only for the excerpt, the endsWith-based CORS origin match, and the denylist safeUrl \u2014 without flagging CommentList, the CSP or the cover image.",
+      "files": [
+        "evals/files/case-6-post-page"
+      ],
+      "expectations": [
+        "Reports that PostView renders dangerouslySetInnerHTML with the raw post.body while safeBody is used only for the excerpt",
+        "Reports that the CORS origin check uses origin.endsWith(host), accepting attacker-registered suffix domains with credentials: true",
+        "Reports that safeUrl is a scheme denylist rather than an http/https allowlist"
+      ],
+      "plants": [
+        {
+          "id": "unsanitized-render",
+          "pattern": "safeBody"
+        },
+        {
+          "id": "cors-suffix-match",
+          "pattern": "endsWith"
+        },
+        {
+          "id": "url-scheme-denylist",
+          "pattern": "safeUrl"
+        }
+      ],
+      "decoys": [
+        "CommentList",
+        "encodeURIComponent",
+        "VITE_API_URL",
+        "sanitize\\.js"
+      ]
+    }
+  ]
+}

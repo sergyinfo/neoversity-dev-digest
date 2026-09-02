@@ -7,35 +7,105 @@ live in each agent's own file.
 Agents are registered at **session start**. A newly added file is not available until
 Claude Code restarts.
 
+## Running the cycle
+
+Three commands, deliberately separate — the two that decide *what* are run by hand, the one
+that executes is a single call:
+
+| Command | Stage | Who starts it |
+|---|---|---|
+| [`/spec`](../commands/spec.md) | specification | you, manually |
+| [`/plan`](../commands/plan.md) | implementation plan | you, manually |
+| [`/cross-review`](../commands/cross-review.md) | independent read of the plan by another model family | you, manually, between plan and impl |
+| [`/impl`](../commands/impl.md) | implement → review → fix loop → verify → land | one call, gates only where it must stop |
+| [`/retro`](../commands/retro.md) | retrospective on how the pipeline performed, with proposals | **manual only** — `disable-model-invocation: true`; nothing summons it |
+
+`/impl` begins at an approved plan and **never writes a spec or a plan**. If it hits a
+finding that contradicts the plan's design, it stops and sends you back to `/plan` rather
+than patching around it.
+
+**The fix loop is bounded at two rounds**, re-reviews only the round's delta, and treats
+`minor` findings as follow-ups rather than fixes. A finding the implementer disputes with
+evidence becomes `contested` and goes to you — never quietly patched, because editing
+correct code to satisfy a false positive is the one review outcome nobody notices.
+
+**The plan gets an outside read before it is executed.** [`/cross-review`](../commands/cross-review.md)
+hands the spec and plan — and nothing about how we reached them — to a model from another
+family, then marks each finding confirmed / rejected / cannot tell against evidence before
+recording it. Withholding our reasoning is the point: a reviewer anchored on it inherits the
+blind spot the stage exists to break. No provider key is configured here, so the default route
+is a manual paste, and nothing leaves the machine without explicit confirmation.
+
+**Cost is controlled by what can actually be counted.** A command cannot meter its own token
+spend, so `/impl` binds on agent invocations instead: the planner declares an envelope per
+execution mode, `/impl` counts every subagent it launches against `--max-agents`, and stops
+at a stage boundary rather than assuming the next stage is cheap. Model tier comes from the
+plan and is never silently upgraded. `--max-usd` is recorded and reported, but marked
+advisory, because it cannot be verified from here.
+
+**`test-writer` is off in the default run** to save tokens. Coverage rides on the plan
+instead: every step that changes observable behaviour carries a `Test:` line, and the
+implementer writes it. Invoke `test-writer` by hand when a change deserves a real suite.
+
 ## Catalog
 
 | Agent | Model | Can write files | Invoke when |
 |-------|-------|-----------------|-------------|
 | [researcher](researcher.md) | `sonnet` | no | A question needs digging across many files or external sources, and you want the conclusion plus its evidence |
-| [planner](planner.md) | `opus` | no | Before any non-trivial implementation, especially one spanning client and server |
+| [spec-creator](spec-creator.md) | `opus` | no | A feature should be agreed on before it is planned — requirements, acceptance criteria, corner cases, workflow, module communication, UX gaps in the design |
+| [implementation-planner](implementation-planner.md) | `opus` | no | Before any non-trivial implementation — it audits the requirements first, asks what is ambiguous, recommends what could be better, then plans; ends by asking single-agent vs multi-agent execution |
 | [implementer](implementer.md) | `inherit` | **yes** | An approved plan exists and needs to be executed |
-| [test-writer](test-writer.md) | `sonnet` | **yes** | A change needs coverage, or an existing suite needs extending, in any of the four packages |
-| [plan-verifier](plan-verifier.md) | `opus` | no | An implementer reports done and the plan needs checking item by item before merge |
-| [architecture-reviewer](architecture-reviewer.md) | `opus` | no | A diff has landed and its architectural boundaries need checking against the repo's own rules |
+| [test-writer](test-writer.md) | `sonnet` | **yes** | Manual only — a change deserves a real suite beyond the `Test:` line in its plan step |
+| [plan-verifier](plan-verifier.md) | `sonnet` | no | An implementer reports done and the plan needs checking item by item before merge |
+| [architecture-reviewer](architecture-reviewer.md) | `sonnet` | no | A diff has landed and its architectural boundaries need checking against the repo's own rules |
 | [doc-writer](doc-writer.md) | `sonnet` | **yes** | A landed feature is worth documenting outside the session |
 
 ## Pipeline
 
 ```mermaid
 flowchart LR
-    R[researcher] -->|findings + evidence| P[planner]
-    P -->|Development Plan| O((orchestrator))
-    O -->|PLAN.md| I[implementer]
-    I -->|diff| T[test-writer]
-    I -->|Implementation Report + diff| PV[plan-verifier]
-    I --> AR[architecture-reviewer]
-    I -.-> SR[security review]
-    T -.-> O
-    PV -.-> O
-    AR -.-> O
-    SR -.-> O
-    O -->|landed feature| D[doc-writer]
+    R[researcher] -->|findings + evidence| S[spec-creator]
+    S -->|spec body + blocking questions| SC{{"/spec"}}
+    SC -->|specs/module/NN-slug.md| P[implementation-planner]
+    R -->|findings + evidence| P
+    P -->|review + questions + plan| PC{{"/plan"}}
+    PC -->|answers, accepted recs, mode| P
+    PC -->|docs/plans/feature.md| XR{{"/cross-review"}}
+    XR -->|cross-review.md| O((orchestrator))
+    O -->|single-agent pass or multi-agent run| I[implementer]
+    I -->|settled diff| AR[architecture-reviewer]
+    I -->|settled diff| CR["/code-review"]
+    I -->|settled diff| SR["/security-review"]
+    I -.->|manual, when it earns it| T[test-writer]
+    T -.-> AR
+    AR --> PV[plan-verifier]
+    CR -.-> PV
+    SR -.-> PV
+    PV -->|merge gate| D[doc-writer]
 ```
+
+`implementation-planner` is fronted by a slash command. It has no write tools, so
+[`/plan`](../commands/plan.md) is what relays its blocking questions and recommendations to
+the user, asks the execution mode, and persists `docs/plans/<feature>.md`. The split matters:
+a recommendation the user never accepted must not appear in the steps, and the execution
+mode must be chosen by a human before anything runs.
+
+**The spec/plan split is the point.** `spec-creator` answers *what and why* and stops;
+`implementation-planner` answers *how* and never edits the answer to *what*. A spec may
+carry a workflow diagram, a module-interaction table, and contract expectations — those are
+agreements — but never a file path, a step list, or a code block. Both agents are read-only
+and fronted by a command: [`/spec`](../commands/spec.md) persists
+`<package>/specs/<module>/NN-<slug>.md`, [`/plan`](../commands/plan.md) persists
+`docs/plans/<feature>.md`. A `PreToolUse` hook
+([`../hooks/specs-write-guard.sh`](../hooks/specs-write-guard.sh), wired in
+`../settings.json`) is the second rubicon: under any `specs/` directory only `.md`,
+`e2e/specs/*.flow.json`, and `assets/` images may be written. It ignores everything outside
+`specs/`, so it cannot get in the way of the other agents.
+
+**Specs are a numbered series per module** — `01-…`, `02-…`, following the
+`e2e/specs/NN-*.flow.json` precedent. A new spec takes the next free number and may
+`supersede:` an earlier one; nothing is renumbered or deleted, because plans and commits
+cite these paths.
 
 `researcher` is optional input, not a required stage. The orchestrator — the main session —
 persists the plan and runs the review agents; no agent hands off to another directly.
@@ -47,8 +117,35 @@ followed"; `architecture-reviewer` answers "were the boundaries respected". They
 separate because they fail differently: a change can satisfy every plan item and still
 breach a boundary, or respect every boundary while missing half the plan.
 
-**`security review` is still unwritten** (dotted above). No agent backs it —
-`/security-review` and `docs/agent-prompts/security-reviewer.md` cover it for now.
+**Order matters, and it is not the obvious one:**
+
+1. `test-writer`, **when you run it at all**, goes **before** the reviewers. It writes
+   files, so a review that precedes it graded a diff that no longer exists — and test files
+   break boundaries too (a test reaching past `container.repoIntel.*`, a client test
+   re-declaring a contract shape).
+2. `plan-verifier` runs **last**, not early. Its own rule is that a behavioural "Done when"
+   is not proven by a green typecheck — so before the tests exist, most rows come back
+   `cannot tell`, which is an expensive way to learn nothing. The cheap early gate is free:
+   read the implementer's `## Plan coverage` table, and send the work back if a step is
+   `skipped` or `partial` before paying for review.
+
+**`architecture-reviewer` does not find bugs, by design** — a finding must map to one of its
+boundaries B1–B11 or it is dropped, and general correctness and security are explicitly out
+of its scope. Correctness is `/code-review`; security is `/security-review` (the
+`security review` agent is still unwritten — `docs/agent-prompts/security-reviewer.md`
+covers the prompt side). Expecting the architecture reviewer to catch a logic error is the
+most common way this pipeline lets one through.
+
+**Tests are staged, never repeated.** `implementer` runs typecheck plus `vitest related`
+on its own diff and the full package suite once at the end of its track; `plan-verifier`
+re-runs the plan's verification table once as the gate; `test-writer`, when invoked, owns
+the full suite of the packages it covered. All three
+use `--reporter=dot` and quote output verbatim only for failures — the default reporter
+names every test, and that text is paid for twice, on read and on quote.
+
+**Insights are recorded once.** Executing agents emit `## Insight candidates`; the
+orchestrator runs `engineering-insights` at the end of the run. Parallel tracks appending to
+one append-only `INSIGHTS.md` collide.
 
 ---
 
@@ -72,25 +169,86 @@ The **Not established** section is mandatory; an empty one is a claim of complet
 
 ---
 
-## planner
+## spec-creator
 
-**Responsibility.** Turns a request into a Development Plan another agent can execute
-without rediscovering the repo: maps it onto the real package and module layout, names the
-constraints in force with their source, and assigns the project skill the implementer must
-apply at each step.
+**Responsibility.** Writes the specification a team agrees on before anyone plans: the
+problem, the scope and its non-goals, testable requirements with acceptance criteria, the
+states and corner cases the design never drew, the workflow, how the feature talks to other
+modules and what each hop does when it fails, the contract fields that must cross a
+boundary, and UX findings graded blocker / should / idea. It inspects the committed design
+bundles in Chrome rather than reading them as text, and it asks before it writes rather than
+guessing.
 
-**Permissions.** `Read, Grep, Glob, Bash` (read-only). No `Write`/`Edit` — it does **not**
-write `PLAN.md`; it returns the plan and the orchestrator persists it. No `Skill`: it
-*names* the skills the implementer will use rather than executing them. No `Agent`.
+**Permissions.** `Read, Grep, Glob, Skill, Agent` plus the read/navigate Chrome tools. **No
+`Write`, `Edit`, or `Bash`** — the write restriction is structural, not prose: the agent has
+no way to touch the filesystem, and `/spec` is the only thing that persists its output.
 
-`model: opus` — a planning error propagates through the whole implementation.
+It is the **only agent here holding `Agent`**, for one purpose: fanning out `researcher`
+subagents (up to three in parallel, one falsifiable question each) for third-party
+behaviour, prior art, and the git archaeology it cannot do without `Bash`. Researchers
+return evidence; the requirements stay the spec-creator's. `Skill` is limited by prose to
+`mermaid-diagram` and `consult-insights` — every implementation skill is explicitly
+off-limits, because opening `postgresql-table-design` is the shortest path from a
+specification into a schema. `find-docs` needs `npx ctx7` and therefore `Bash`, so external
+docs go to a researcher instead.
+
+`model: opus` — a missed corner case becomes a missing requirement, then a bug.
 
 | | |
 |---|---|
-| **Input** | A feature request or change description. Vague input triggers clarifying questions first. |
-| **Output** | Development Plan: Goal & scope (with explicit **Out of scope**) → Affected packages → Constraints in force → **Existing scaffolding check** → Steps (files, skill, "done when") → Contract & DB changes → Verification table → Risks → Handoff. |
+| **Input** | A feature request, today's date, an optional `<package>/<module>` target, the numbers already used in that module folder, the design bundle paths, and the earlier specs when superseding one. |
+| **Output** | Four sections: **A** the spec body (15 sections, persisted verbatim), **B** blocking questions (max six, with options and a recommendation), **C** handoff — target path and next free number, design coverage, research delegated, corner-case misses, insight candidates, **D** a 14-line final self-check printed `pass` / `fixed` / `n/a — reason`. |
 
-**Consumed by** `implementer`, via a `PLAN.md` the orchestrator saves.
+**Where the WHAT/WHY line actually falls.** Allowed: workflow and state diagrams, module
+communication with per-hop failure behaviour, contract expectations as a table of fields and
+meanings, observable error semantics. Not allowed: file paths, step lists, schemas, DDL,
+library choices, algorithms — and never a code block. *If a reader could paste it into the
+repo and have it compile, it went too far.*
+
+**Consumed by** `implementation-planner`, which treats the spec as binding, uses its
+`## 12. Traceability` table as a coverage checklist, and turns its open questions into
+blocking ones.
+
+**Spec status is a gate, not decoration:** `spec-creator` writes `draft`, **a human sets
+`approved`** after reading it, and `/spec` flips it to `superseded` when a later number
+replaces it. `/plan` **refuses to plan anything that is not `approved`** and never edits a
+spec's frontmatter — planning a draft is how an unagreed requirement becomes a merged
+feature, because the plan makes it look settled and nothing downstream asks again.
+
+---
+
+## implementation-planner
+
+**Responsibility.** Turns an agreed requirement into an executable plan — but audits the
+requirement first. It grades every requirement (clear / ambiguous / conflicting /
+unverifiable / missing / **already built** / infeasible here), asks the blocking questions,
+recommends what could be done better without folding those recommendations into the steps,
+then maps the work onto the real package and module layout with the constraints, skills, and
+verification commands in force. It finishes by asking whether to execute as a single-agent
+pass or a multi-agent run, having produced both decompositions.
+
+**Permissions.** `Read, Grep, Glob, Bash` (read-only). No `Write`/`Edit` — it does **not**
+write the plan; `/plan` persists it. No `Skill`: it *names* the skills the executing agent
+will use rather than executing them. No `Agent`.
+
+`model: opus` — a planning error propagates through the whole implementation, and a missed
+"already built" wastes the entire run.
+
+| | |
+|---|---|
+| **Input** | A requirement or feature request, today's date, any `<package>/specs/<module>/spec.md` and research write-up, and the previous plan when re-planning. |
+| **Output** | Requirements review → Blocking questions → Recommendations → Goal & scope (with explicit **Out of scope**) → Affected packages → Constraints in force → **Existing scaffolding check** → Steps (files, skill, "done when") → Contract & DB changes → Verification table → **both execution decompositions** → Risks → Handoff. |
+
+**It does not write specifications.** Requirements, acceptance criteria, and UX calls are
+inputs. A sentence a product owner would have to approve does not belong in a plan — it
+belongs in a question or a recommendation.
+
+**Multi-agent decomposition is constrained, not free.** Parallel tracks need disjoint file
+sets; contract landing and `db:migrate` are barriers; `server/src/modules/index.ts` belongs
+to exactly one track; parallel writers in one package need worktree isolation; reviewers
+grade a settled diff.
+
+**Consumed by** `implementer`, via `docs/plans/<feature>.md`.
 
 ---
 
@@ -203,7 +361,7 @@ the body, with an explicit "if you are editing a `.ts` file, stop and report".
 | **Output** | Files written → **Placement rationale** → **Index updates** → Diagrams → Sources used → Not documented → Insight candidates. |
 
 It carries the verified inventory of which `docs/`/`specs/` directories are real and which
-are seven "Empty for now." stubs, and the rule that filling a stub obliges de-stubbing and
+are eight "Empty for now." stubs, and the rule that filling a stub obliges de-stubbing and
 indexing its README. Gotchas are routed to `INSIGHTS.md` via the skill rather than into a doc.
 
 ---
@@ -231,7 +389,7 @@ each rule comes from:
 | Barrel is extended with new files, never edited in place | `server/src/vendor/shared/index.ts` |
 | Migration generation and output path | `server/drizzle.config.ts` |
 | The `ApiError` shape and single-client rule | `client/src/lib/api.ts` |
-| Seven `docs/`/`specs/` directories are "Empty for now." stubs — destinations, not sources; every package `CLAUDE.md` already links to them | the seven stub `README.md` files; the four package `CLAUDE.md` *Use when* sections |
+| Eight `docs/`/`specs/` directories are "Empty for now." stubs — destinations, not sources; every package `CLAUDE.md` already links to them | the eight stub `README.md` files; the five package `CLAUDE.md` *Use when* sections |
 | Documentation diagrams are fenced mermaid blocks, and every one in the repo is a `flowchart` | the six `README.md` files carrying mermaid blocks |
 | The client `mermaid` npm dependency is a runtime renderer for `OnboardingSection.diagram`, **not** a docs toolchain; there is no `mmdc` and no diagram CI | `client/src/components/mermaid-diagram/`, `contracts/knowledge.ts` |
 
@@ -283,7 +441,7 @@ ESM carve-out. B1 outranks B7 inside `client/src/vendor/shared/`.
 | Server unit/integration split by filename (`--exclude '**/*.it.test.ts'` vs `.it.test`) | `.github/workflows/server-unit.yml`, `server-integration.yml` |
 | **No lint step exists** — no ESLint/Biome/Prettier config, no `lint` script anywhere | absence verified across all four packages and all CI workflows |
 | A new path alias must be added in both `tsconfig.json` and `vitest.config.ts` | the per-package `vitest.config.ts` files, which duplicate the aliases |
-| Nothing is pre-approved beyond three git commands; no hooks | `.claude/settings.local.json` |
+| Nothing is pre-approved beyond three git commands; the one project hook guards writes under `specs/` only | `.claude/settings.local.json`, `.claude/settings.json` |
 | A server test importing `test/helpers/pg.ts` **must** carry the `.it.test.ts` suffix, or it silently breaks the no-Docker unit lane | `TESTING.md` |
 | `server/package.json` is `skip-worktree`, so CI calls `pnpm exec vitest run …` rather than committed test scripts | `TESTING.md` |
 | Testing is typological, not exhaustive — no coverage target | `TESTING.md` |
@@ -324,6 +482,13 @@ The load-bearing points:
   "could not check" must never be recorded as "not done".
 - `color` is optional (`researcher.md` omits it). Taken so far: blue, green, yellow, red,
   purple, cyan.
+- **Model follows the shape of the judgement, not the importance of the stage.** The two
+  reviewers run on `sonnet` because both work from a closed list with mandatory evidence —
+  `architecture-reviewer` against boundaries B1–B11, `plan-verifier` against the plan's own
+  rows, where an unevidenced row is `cannot tell` by definition. The two authoring agents
+  stay on `opus` because their output is open-ended and everything downstream inherits their
+  mistakes: a missed corner case in a spec and a missed "already built" in a plan both cost
+  a whole run.
 
 Two gaps worth naming: there is **no official Anthropic guidance on Mermaid authoring** (only
 a preference for text/SVG over raster), and none on the docs-vs-code-comments boundary. The

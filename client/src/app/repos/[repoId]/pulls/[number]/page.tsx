@@ -10,6 +10,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Skeleton, ErrorState } from "@devdigest/ui";
 import { AppShell } from "../../../../../components/app-shell";
 import { RepoNotFound } from "@/components/repo-not-found";
+import { lineDomId } from "@/components/diff-viewer/helpers";
 import { PrDetailHeader } from "./_components/PrDetailHeader";
 import { OverviewTab } from "./_components/OverviewTab";
 import { FindingsTab } from "./_components/FindingsTab";
@@ -129,6 +130,75 @@ export default function PRDetailPage() {
     return () => window.clearInterval(timer);
   }, [focusFindingId, tab, findingsCount]);
 
+  /**
+   * Why & Risk → Files changed. The mirror image of `openFindingFromDiff`
+   * above: a review-focus entry names a file and (usually) a line, and this
+   * turns that into the one navigation that shows it.
+   *
+   * `push`, and all three params in a SINGLE call, for the same reasons as the
+   * jump above — the reader chose this, so Back must return them to the
+   * Overview tab they left, and setting `tab`, `file` and `line` separately
+   * would cost three history entries for one click.
+   *
+   * `line` is optional: a focus entry is allowed to name a file only, in which
+   * case the tab opens on the file with nothing to scroll to.
+   *
+   * Its caller is the Why & Risk card's review-focus list on the Overview tab,
+   * reached through `OverviewTab`'s `onOpenFile`.
+   */
+  const openFileFromBrief = (path: string, line?: number) => {
+    const sp = new URLSearchParams(search.toString());
+    sp.set("tab", "diff");
+    sp.set("file", path);
+    if (line != null) sp.set("line", String(line));
+    else sp.delete("line");
+    router.push(`/repos/${repoId}/pulls/${number}?${sp.toString()}`);
+  };
+
+  const focusFile = search.get("file");
+  const focusLineParam = search.get("line");
+  // A hand-edited `?line=` is a value, not a crash: anything that is not a
+  // positive integer is treated as "no line" and the file simply opens.
+  const focusLine =
+    focusLineParam && /^\d+$/.test(focusLineParam) ? Number(focusLineParam) : null;
+  const diffFocus = focusFile ? { file: focusFile, line: focusLine ?? undefined } : undefined;
+  const focusInDiff = !!focusFile && (pr?.files ?? []).some((f) => f.path === focusFile);
+
+  /**
+   * Clear `file`/`line` once the jump has landed, so a later re-render — or a
+   * Back into this URL — does not scroll the reader away again, and the address
+   * bar stops advertising a target that has already been consumed.
+   *
+   * `replace`, not `push`: consuming a param is not a navigation the reader
+   * made, and Back must still return them to the Overview tab.
+   *
+   * It polls for the same reason the findings jump does — the line mounts a
+   * frame or two later, and Smart Diff can swap the file list underneath it
+   * when the grouping arrives. A file this PR did not return is left alone:
+   * there is nothing to land on, and the Files tab keeps saying so.
+   */
+  React.useEffect(() => {
+    if (!focusFile || tab !== "diff" || !focusInDiff) return;
+    const clear = () => {
+      const sp = new URLSearchParams(search.toString());
+      sp.delete("file");
+      sp.delete("line");
+      router.replace(
+        `/repos/${repoId}/pulls/${number}${sp.toString() ? `?${sp.toString()}` : ""}`,
+      );
+    };
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      const landed =
+        focusLine == null || document.getElementById(lineDomId(focusFile, focusLine)) != null;
+      if (landed || ++tries > 20) {
+        window.clearInterval(timer);
+        clear();
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [focusFile, focusLine, focusInDiff, tab]);
+
   const repoName = activeRepo?.full_name ?? repoId;
   // The real "owner/repo" (null until the repo is loaded) — used to build
   // github.com deep-links for the header and finding file references.
@@ -195,6 +265,7 @@ export default function PRDetailPage() {
             // The detail payload carries the intent, so a refetch (e.g. after a
             // recompute) shows the skeleton rather than the previous intent.
             intentLoading={detailLoading}
+            onOpenFile={openFileFromBrief}
           />
         )}
 
@@ -231,6 +302,7 @@ export default function PRDetailPage() {
             filesCount={pr.files_count}
             files={pr.files}
             onOpenFinding={openFindingFromDiff}
+            focus={diffFocus}
             canComment={pr.status === "open"}
           />
         )}

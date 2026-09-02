@@ -44,6 +44,26 @@ export interface ResolvedReference {
   content: string;
 }
 
+/**
+ * A reference that was parsed but produced no content.
+ *
+ * Previously this only ever reached a log line. It is returned now because a
+ * caller that renders references to a human has to be able to say WHY a
+ * pointer went unread — "the budget ran out" and "external fetching is off"
+ * are different answers, and silently returning fewer items conflates them
+ * with "there was nothing to read".
+ */
+export interface SkippedReference {
+  /** The raw matched text, or the resolved source once we had one. */
+  source: string;
+  reason: string;
+}
+
+export interface ResolveResult {
+  resolved: ResolvedReference[];
+  skipped: SkippedReference[];
+}
+
 /** A repo-relative doc path, e.g. `docs/plans/intent.md`. */
 const FILE_RE = new RegExp(
   `\\b((?:${REFERENCE_DOC_DIRS.join('|')})/[\\w.\\-/]+\\.(?:md|mdx|txt))`,
@@ -142,6 +162,17 @@ export interface ResolveDeps {
   /** null when external fetching is disabled or unavailable. */
   webFetch: WebFetchClient | null;
   budgetBytes?: number;
+  /**
+   * When an item does not fit the remaining budget: drop it whole (`true`) or
+   * slice it and mark it `…[truncated]` (`false`).
+   *
+   * Defaults to **false** so the Intent Layer, the original caller, keeps its
+   * existing byte-for-byte behaviour. Opt in when the consumer reasons over the
+   * document's MEANING rather than sampling it: cutting a document mid-sentence
+   * can sever a "must not" from its clause and invert it, and half a rule read
+   * confidently is worse than a rule known to be missing.
+   */
+  dropWholeItems?: boolean;
   log?: {
     info: (msg: string, data?: unknown) => void;
   };
@@ -156,33 +187,48 @@ export interface ResolveDeps {
 export async function resolveReferences(
   refs: ParsedRef[],
   deps: ResolveDeps,
-): Promise<ResolvedReference[]> {
+): Promise<ResolveResult> {
   const budget = deps.budgetBytes ?? REFERENCE_BUDGET_BYTES;
   const order: ReferenceKind[] = ['repo-file', 'github', 'url'];
   const sorted = [...refs].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
 
   const resolved: ResolvedReference[] = [];
-  const skipped: string[] = [];
+  const skipped: SkippedReference[] = [];
   let used = 0;
 
   for (const ref of sorted) {
     if (used >= budget) {
-      skipped.push(`${ref.raw} (budget)`);
+      skipped.push({ source: ref.raw, reason: 'budget' });
       continue;
     }
     let item: ResolvedReference | undefined;
     try {
       item = await fetchOne(ref, deps);
     } catch (err) {
-      skipped.push(`${ref.raw} (${(err as Error).message})`);
+      skipped.push({ source: ref.raw, reason: (err as Error).message });
       continue;
     }
-    if (!item || !item.content.trim()) {
-      skipped.push(`${ref.raw} (empty)`);
+    if (!item) {
+      skipped.push({ source: ref.raw, reason: unavailableReason(ref, deps) });
+      continue;
+    }
+    if (!item.content.trim()) {
+      skipped.push({ source: ref.raw, reason: 'empty' });
       continue;
     }
     const remaining = budget - used;
     if (Buffer.byteLength(item.content) > remaining) {
+      // Two ways to not fit, chosen by the caller — see `dropWholeItems`.
+      if (deps.dropWholeItems) {
+        skipped.push({
+          source: item.source,
+          reason: `budget (needs more than the ${remaining}B left of ${budget}B)`,
+        });
+        deps.log?.info(
+          `Intent references: dropped ${item.source} whole — it does not fit the remaining ${remaining}B of the ${budget}B reference budget`,
+        );
+        continue;
+      }
       item = {
         ...item,
         content: `${item.content.slice(0, remaining)}\n…[truncated]`,
@@ -197,9 +243,25 @@ export async function resolveReferences(
 
   deps.log?.info(
     `Intent references: ${resolved.length}/${refs.length} resolved (${used}B)` +
-      (skipped.length > 0 ? `; skipped ${skipped.join(', ')}` : ''),
+      (skipped.length > 0
+        ? `; skipped ${skipped.map((s) => `${s.source} (${s.reason})`).join(', ')}`
+        : ''),
   );
-  return resolved;
+  return { resolved, skipped };
+}
+
+/**
+ * Why `fetchOne` returned nothing, without re-running it.
+ *
+ * `fetchOne` signals "this port cannot serve this reference" with `undefined`,
+ * which used to be reported as `empty` — indistinguishable from a document that
+ * really was blank. A missing PAT and a disabled external fetcher are
+ * configuration facts the caller can act on, so they are named.
+ */
+function unavailableReason(ref: ParsedRef, deps: ResolveDeps): string {
+  if (ref.kind === 'github' && !deps.github) return 'no github token configured';
+  if (ref.kind === 'url' && !deps.webFetch) return 'external fetching disabled';
+  return 'unavailable';
 }
 
 async function fetchOne(

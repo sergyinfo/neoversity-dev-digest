@@ -1,0 +1,11 @@
+{
+  "name": "conventions panel",
+  "steps": [
+    { "goto": "/repos/acme-web/conventions" },
+    { "waitFor": "[data-testid=conventions-panel]" },
+    { "expectText": "Conventions" },
+    { "llm": { "prompt": "Does this panel look correct to a user?", "expect": "yes" } },
+    { "click": "[data-testid=refresh]" },
+    { "waitFor": "[data-testid=conventions-updated]" }
+  ]
+}

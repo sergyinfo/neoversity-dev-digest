@@ -1,0 +1,151 @@
+# Run: Project Context
+
+Started: 2026-08-29 · Branch: `lesson-5-lab` · Mode: **multi-agent**
+Plan: `docs/plans/project-context.md` (amended after cross-review, `a8273db`)
+Spec: `server/specs/project-context/01-project-context.md` (`approved`)
+Ceiling: **12** — the plan's counted envelope of 11, plus `doc-writer` added at Stage 0
+
+## Stages
+
+| # | Stage | Status | Artefact / result |
+|---|---|---|---|
+| 0 | Intake & baseline | **done** | Tree clean at `a8273db`; baseline captured before anything changed, all green |
+| 1 | Implementation (T0–T6) | **done** | all 7 tracks landed, `55a1639`…`aa7bf6c` |
+| 2 | Review ×3 | **done** | boundary: 1 major · correctness: 3 major, 3 minor · security: **1 BLOCKER**, 1 major, 5 minor |
+| 3 | Fix loop (2 rounds) | **done** | Round 1 `148151c` — 1 blocker + 5 majors, none contested · Round 2 `5022927` — 4 fixed, **1 contested with evidence** |
+| 4 | Verification | **done** | **19/19 steps verified, 0 not verified.** 30/31 ACs verified; AC-24's e2e half unreached |
+| 5 | Land | **done** | `server/docs/project-context.md` written; INSIGHTS were owned by T6 and deliberately not re-run; committed per track and per round |
+
+**Agent count: 15 / 15 — at the ceiling.** 7 `implementer` tracks, 3 reviewers, 2 fix rounds, 1 `plan-verifier`, 1 `doc-writer`, and the raise from 12 recorded below. — ceiling raised from 12 at the Stage 1→2 boundary so the fix rounds are funded.
+
+### Tracks
+
+| Track | Scope | Model | Agent | Status | Commit |
+|---|---|---|---|---|---|
+| T0 | `SpecFile` +3 optional fields, mirrored; module-local contracts | opus | 1 | **done** | `55a1639` |
+| T1 | Attachment table + generated migration + constraint test | opus | 2 | **done** | `c38e5bc` |
+| T2 | Discovery, assemble, repository/service, routes, registry, run injection | opus | 4 | **done** | `d76b0bc` |
+| T3 | Client hooks, i18n, nav, `ProjectionSummary` | sonnet | 3 | **done** | `d413a0a` |
+| T4 | `/context` page + `AgentEditor` Context tab | sonnet | 5 | **done** | `06a3e03` |
+| T5 | Trace drawer tests (no implementation) | sonnet | 6 | **done** | `da8999b` |
+| T6 | e2e flow 08 + fixture clone + seed + INSIGHTS | sonnet | 7 | **done** | `aa7bf6c` |
+
+## Baseline (pre-existing failures — never blamed on this change)
+
+**None. Every gate was green before the first track started.**
+
+| Package | Command | Result |
+|---|---|---|
+| server | `pnpm typecheck` | pass, no output |
+| server | `vitest run --exclude '**/*.it.test.ts'` | **31 files, 408 tests**, all passed |
+| server | `vitest run .it.test` (with `DOCKER_HOST`) | **9 files, 66 tests**, all passed — ran, not skipped |
+| client | `pnpm typecheck` | pass, no output |
+| client | `pnpm test` | **21 files, 143 tests**, all passed |
+| reviewer-core | `npm run typecheck` | pass — this is the "it was not modified" baseline |
+| — | `diff -rq server/src/vendor/shared client/src/vendor/shared` | prints nothing |
+
+The integration baseline matters here: the plan adds an `.it.test` in T1, and under OrbStack
+these suites **fail rather than skip** without `DOCKER_HOST`. Knowing 66/66 passed today is
+what makes a later failure attributable.
+
+## Review findings
+
+| # | Source | Severity | Finding | Round | Outcome |
+|---|---|---|---|---|---|
+| A1 | architecture-reviewer B3 | **major** | `run-executor.ts:19,289` imports and constructs `ProjectContextService` directly instead of reaching it through the container, the way `repoIntel`, `intent` and `blast` all are. Costs the `ContainerOverrides` injection seam every sibling capability has, makes `reviews` depend on a concrete class in another module, and its justifying comment cites the wrong precedent — the `intent/block.js` import above it is justified as a **leaf** (contract types only), while `project-context/service.ts` imports the container and is not one | 1 | **fixed** |
+| C1 | code-review | **major** | The projection can never apply the cross-repo skip. `service.ts:250` passes `att.repoId` as `reviewRepoId`, so `readAttachment`'s guard at `:286` is `x !== x` — permanently false. A multi-repo agent's projection injects documents the run skips, so AC-26's "agree exactly" fails. Root cause is structural: the projection endpoint takes no repo | 1 | **fixed** |
+| C2 | code-review | **major** | No dedupe in `resolveForAgent` (`repository.ts:234-243`). The partial unique indexes are per target kind, so a document attached directly **and** via an enabled skill arrives twice, is rendered twice into the prompt, and pays the budget twice — possibly pushing a different document out. `usageCounts` dedupes this exact case for display, so the page says 1 while the run sends 2. Knock-ons: a React duplicate `key`, and `specsReadFor`'s path-keyed reason map overwriting one cause with another | 1 | **fixed** |
+| C3 | code-review | **major** | `attachedPaths` ignores `repo_id` (`AgentsTab.tsx:35-38,63`, `SkillsTab.tsx:26-29,71`); the server lists attachments by workspace and target only. Two repos with the same path: the toggle renders on for a document that is not attached here, and detaching removes **the other repository's** attachment. One predicate fixes it | 1 | **fixed** |
+| C4 | code-review | minor | `usageCounts` splits its composite key on the **first** space (`repository.ts:282-287`), and paths may contain spaces. `docs/my notes.md` parses as `docs/my`, so a document in use renders "—" and a phantom bucket appears | 1 | **fixed** |
+| C5 | code-review | minor | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's `assembly.specs` does not. The demo artefact shows the exact heading-vs-`assembly.specs` conflation BQ-1 exists to prevent | 1 | **fixed** |
+| C6 | code-review | minor | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** — the `any` flag is dead code | 1 | **fixed** |
+| **S1** | **security-review** | **BLOCKER** | **The read gate enforces containment but not the allow-list.** The `.md` filter, the doc-directory allow-list and `EXCLUDED_DIRS` live **only inside `walkDir`**; neither `attach()` (`service.ts:113-177`) nor `readDoc()` (`discovery.ts:195-220`) applies any of them. Proved by executing the real module: `readDoc('.git/config')` returns `url = https://x-access-token:ghp_…@github.com/…`. That PAT is a **single global secret**, written verbatim into `.git/config` by `git clone` and never rewritten. Attach it, and on the next run it goes to the LLM provider **and** is persisted into `prompt_assembly`, which the trace drawer renders in full. `.env` and any source file read the same way | 1 | **fixed** |
+| S2 | security-review | **major** | The per-target cap does not bound per-run reads. `resolveForAgent` returns the agent's 20 **plus 20 per enabled linked skill**, and `linkSkill` is an unbounded upsert — so the real ceiling is `20 × (1 + N_skills)`, every one `stat`-ed, read and **tokenized before the budget drops anything**. 100 skills ≈ 2 020 reads, ~129 MB. Fires on the run **and** on the uncached projection route | 1 | **fixed** |
+| C7 | code-review | test quality | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string — as its "secret"; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; and `reviews.it.test.ts:750` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion | 1 | **fixed** |
+
+## Decisions
+
+| Gate | Question | Answer |
+|---|---|---|
+| Pre-run | Plan amended after cross-review before starting | Yes — three findings (F1 unique-index NULL semantics, F2 inert allow-list entry, F3 clone path set but missing) were resolved in the plan first. Starting on the unamended plan would have had T1 generate a migration whose index admits duplicates |
+| Stage 0 | Execution mode | Multi-agent (from `--mode multi`; the plan's own recommendation) |
+| Stage 0 | Agent ceiling | **12** — the plan counts 11 (7 tracks + 2 reviewers + 2 fix rounds); `doc-writer` is the twelfth |
+| Stage 0 | Commit policy | **Per track** — a green track is committed before the next starts |
+| Stage 0 | `doc-writer` at the end | **Yes**, added beyond the plan's envelope |
+
+## Open at the end
+
+### Round 2 closed five of the nine — and refuted one of them
+
+`5022927` fixed F7 (the three vacuous tests), F9, F10 and F11, and **contested C4/F8**.
+
+**The contested one is worth reading.** The reviewer reported that `usageCounts` splits its
+composite key on the first space. It does not: the separator is a raw **NUL byte**, and
+`isSafeRelPath` rejects any path containing one, so the key was already unambiguous and the
+counts were already correct. Both reviewers who reported it, and I when I relayed it, read the
+byte as a space — because **a literal `0x00` in a `.ts` file makes `grep` treat the whole file
+as binary and print nothing**, and it renders as whitespace in most viewers. The implementer
+lost a cycle to it as well, then proved the code correct both ways: the shipped separator gives
+the right count, and changing it to a real space turns the new test red.
+
+It replaced the two literal bytes with `\u0000` escapes — no behaviour change, and the file is
+greppable again. Three other files in `server/src` carry the same habit and are untouched.
+
+**Two structural facts surfaced while making the tests honest, and both generalise:**
+- The old traversal assertion checked only status and code, and **three independent gates return
+  the identical 422 envelope**. Deleting any one gate left the test green. Asserting the
+  *message* distinguishes schema from service — but still not gate from gate.
+- A planted-secret guard aimed at **skip** reasons is vacuous **by construction**: the skip
+  branch is reached only when content is `null` or whitespace-only, so it cannot carry a secret.
+  The drop branch is the only non-injected outcome holding real text. That is why
+  `DOC_SECRET.slice(0, 0)` looked like a plausible test.
+
+### Four minors still open
+
+C5 (the seeded trace writes `sectionText`, which includes the heading, into
+`prompt_assembly.specs`, which does not) · C6 (`SkillsTab` renders a null contribution as `0`)
+· S3 (the untrusted fence escape is exact-match and case-sensitive; a forged **opening** tag is
+not escaped at all) · S7 (the attachment-count cap is a read-then-insert TOCTOU with no
+DB-level backstop, unlike the duplicate case).
+
+### Nine minors, deliberately held out of round 1
+
+The fix brief scoped round 1 to the blocker and the five majors, because scope creep in a fix
+round is how a reviewable diff stops being reviewable. These are the remainder, unchanged:
+
+| # | Item |
+|---|---|
+| C4 | `usageCounts` splits its composite key on the **first** space (`repository.ts:311-312`), so `docs/my notes.md` parses as `docs/my` — a document in use renders "—", plus a phantom bucket |
+| C5 | The seeded trace writes `sectionText` into `prompt_assembly.specs`, which includes the heading; a real run's does not. The demo artefact shows the exact conflation BQ-1 exists to prevent |
+| C6 | `SkillsTab` computes a null contribution then renders `(contribution ?? 0)`, so "no attachments" and "estimates unmeasurable" both read as **0 tokens** |
+| C7 | Three tests are weaker than their names: `prompt-log.test.ts` plants `slice(0,0)` — an empty string; `routes-smoke.test.ts` claims to refuse a traversal path but sends `path: ''`; `reviews.it.test.ts` locates the AC-26 line with a matcher that also matches the drop line, so a run **with** a drop throws a TypeError instead of failing an assertion |
+| S3 | The untrusted fence escape is exact-match and case-sensitive; `</UNTRUSTED>`, `</untrusted >` and a forged **opening** tag all survive. Pre-existing shared code, new consumer |
+| S4 | Non-UUID ids in the body/query reach UUID columns → PG `22P02` → 500 with the raw Postgres message echoed. `IdParams` exists to prevent exactly this |
+| S5 | `path` has no max length and `order` no bounds; on the not-cloned attach path a >2 704-byte path blows the btree limit — the failure mode already documented for `symbols.name` in the same schema file |
+| S6 | `isSafeRelPath` accepts control characters, and the path is interpolated into log message strings |
+| S7 | The attachment-count cap is a read-then-insert TOCTOU with no DB-level backstop, unlike the duplicate case |
+
+### Three rows the verifier could not settle
+
+- **AC-24's e2e half.** Flow 08 passed **26 of its 37 steps** on this machine and failed at step 27 — the shared PR-list navigation, not its own logic. Steps 28–37 are the trace-drawer assertions. **AC-14 is materially green**: every one of its assertions passed. Settled by running with `HOME` scoped away from a real PAT, as the implementing track did (1/1, 37 steps), or by CI.
+- **§7's latency figures** — 2 s discovery for 500 documents, sub-500 ms run injection. The plan already listed these as unverifiable without a clone at scale.
+- **`db:generate`** was not re-run, because re-running it on a settled schema is a write. In its place, the integration suite applies `0014` from scratch on a fresh PG16 container every run.
+
+### One spec deviation, correctly named
+
+`MAX_DOCS_PER_RESOLUTION = 40` adds a **sixth** skip cause that REQ-12 does not enumerate, and
+above 40 documents REQ-11's "documents attached to that agent plus those from its enabled linked
+skills are read" no longer holds for the tail. It is applied on both the projection and the run
+path through one function, so AC-26/AC-27 equality is preserved, and skipped documents still
+appear with a reason. No AC exercises that configuration and none fails. The constant's own
+comment states the judgement.
+
+### Plan defects worth carrying into `/retro`
+
+- **S8's "Done when" is now narrower than the code** — the fix round made `repo_id` required and
+  the step text was never amended, so a reader grading S8 literally would flag correct code.
+- **Two steps name file sets incomplete for their own "Done when"**: S3 cannot be done without
+  `db/schema.ts`, S16 cannot be done without `agents/[id]/page.tsx`. Both were edited anyway.
+- **S11's "Done when" is not satisfiable as written** — "reverts the toggle" presumes an
+  optimistic update the hooks deliberately do not perform. It describes one of two valid designs
+  as if it were the requirement.

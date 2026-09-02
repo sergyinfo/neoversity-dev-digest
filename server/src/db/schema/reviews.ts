@@ -71,9 +71,39 @@ export const prIntent = pgTable('pr_intent', {
   derivedAt: timestamp('derived_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * One PR Why/Risk Brief per PR (L05). Tenancy scopes transitively through
+ * `pr_id` — there is no `workspace_id` here, so ownership must be verified
+ * BEFORE this row is read.
+ *
+ * Every column below `json` is nullable: the widening (spec REQ-8/REQ-15) is
+ * additive over a table that shipped in `0000_init.sql` with no writers, so it
+ * migrates without a backfill and a pre-widening row still reads.
+ */
 export const prBrief = pgTable('pr_brief', {
   prId: uuid('pr_id')
     .primaryKey()
     .references(() => pullRequests.id, { onDelete: 'cascade' }),
+  /** The brief document itself (a grounded `BriefDocument`). Unchanged. */
   json: jsonb('json').notNull(),
+  /**
+   * REQ-8's state fingerprint — both halves of `BriefFingerprint` in one
+   * column. Only the `local` half is recomputed on the read path (D-1a).
+   */
+  stateFingerprint: text('state_fingerprint'),
+  /** REQ-15's content-free provenance record (a `BriefProvenance`). */
+  provenance: jsonb('provenance'),
+  /** The resolved feature model that produced it. */
+  model: text('model'),
+  /** Read from the provider result, never recomputed. */
+  costUsd: doublePrecision('cost_usd'),
+  /** The provider's own token counts — the estimate is judged against these. */
+  tokensIn: integer('tokens_in'),
+  tokensOut: integer('tokens_out'),
+  /**
+   * When the model was called. Under D-1a this is the only thing that dates
+   * the linked issue and the reference documents the brief read. Written out
+   * in full rather than via the `now()` helper, which hardcodes `created_at`.
+   */
+  generatedAt: timestamp('generated_at', { withTimezone: true }),
 });

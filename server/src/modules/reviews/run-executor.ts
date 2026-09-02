@@ -12,6 +12,10 @@ import { loadDiff } from './diff-loader.js';
 // Leaf module (contract types only) — importing it does not create a cycle with
 // intent/service.ts, which depends on this module's diff-loader.
 import { renderIntentBlock } from '../intent/block.js';
+// Contract type only. The SERVICE is reached through `container.projectContext`
+// (fix-brief F6) — the leaf-module justification above does not carry over to
+// `project-context/service.ts`, which imports the container and is not a leaf.
+import type { RunContext } from '../project-context/service.js';
 
 /** Thrown by a run when the user cancels it mid-flight (between map files). */
 export class RunCancelledError extends Error {
@@ -260,6 +264,62 @@ export class ReviewRunExecutor {
         runLog.info('skills: lookup failed — continuing without them');
       }
 
+      /**
+       * L05 — project context: markdown attached to this agent, plus what it
+       * inherits from its ENABLED linked skills, read from THIS repo's clone.
+       *
+       * Best-effort in exactly the shape of the skills lookup above ("continuing
+       * without them"), per REQ-12 and the house omit-don't-throw rule. Two
+       * failure modes are handled separately on purpose:
+       *
+       *  - A DOCUMENT failing (missing, over cap, empty, wrong repo, path
+       *    refused) is not an error at all — the service classifies it and
+       *    returns it as a skip, so the run still injects the others (AC-20).
+       *  - A CLONE that is gone yields every document skipped and a completed
+       *    run (§6, "Every attached document fails" / cross-review F3), because
+       *    `resolveCloneRoot` classifies its own ENOENT instead of throwing it
+       *    into this catch as an opaque failure.
+       *
+       * The catch below therefore only fires on something genuinely unexpected,
+       * and even then the review is not lost.
+       */
+      let projectContext: RunContext | null = null;
+      try {
+        projectContext = await this.container.projectContext.resolveFor(
+          workspaceId,
+          agent.id,
+          { id: repo.id, clonePath: repo.clonePath },
+        );
+        // REQ-14 — one line per skip or drop, naming a path and a cause and
+        // NEVER content (§7's observability-safety rule).
+        for (const s of projectContext.skipped) {
+          runLog.info(`project context: skipped ${s.path} — ${s.reason}`);
+        }
+        for (const d of projectContext.dropped) {
+          runLog.info(`project context: dropped ${d.path} — ${d.reason}`);
+        }
+        if (projectContext.texts.length > 0) {
+          /**
+           * BQ-1/(a) — the recorded number AC-26 asserts against.
+           *
+           * `describePromptAssembly` counts `assembly.specs`, which is the
+           * joined blocks WITHOUT the `## Project context` heading
+           * (`prompt.ts:132` puts the heading in `user`), so the existing
+           * section stat can never equal a projection that includes it.
+           * `prompt-log.ts` is deliberately unchanged — its number keeps its
+           * meaning and this one is additional, produced by the SAME
+           * `assembleProjectContext` the projection route calls.
+           */
+          runLog.info(
+            `project context: ${projectContext.texts.length} document(s), ~${projectContext.sectionTokens} tokens`,
+            { sectionTokens: projectContext.sectionTokens, documents: projectContext.texts.length },
+          );
+        }
+      } catch (err) {
+        runLog.info('project context: lookup failed — continuing without it');
+        runLog.metric('project context lookup failed', { error: (err as Error).message });
+      }
+
       // ---- Engine: assemble → single-pass → grounding -----------------------
       // The pure review pipeline lives in @devdigest/reviewer-core (shared with
       // the CI runner). The service owns only I/O: repo-intel context resolution
@@ -275,6 +335,16 @@ export class ReviewRunExecutor {
         // L02 — same omit-when-empty contract as the digests below, so a run with
         // no linked skills produces a byte-identical prompt to before.
         ...(skills.length > 0 ? { skills } : {}),
+        // L05 — AC-19's carrier. The SPREAD, not a plain `specs: texts` key:
+        // passing `[]` happens to work today only because `prompt.ts:106`
+        // guards on `length > 0`, so the spread makes "an agent with no
+        // attachments produces a byte-identical prompt" a property of THIS call
+        // site rather than of engine internals. `texts` can never contain an
+        // empty string — `assembleProjectContext` filters those out before
+        // returning, which is the other half of the same guarantee.
+        ...(projectContext && projectContext.texts.length > 0
+          ? { specs: projectContext.texts }
+          : {}),
         // T1.3 — pass the callers digest only when we built one. assemblePrompt
         // omits the section when this is empty/undefined.
         ...(callersDigest ? { callers: callersDigest } : {}),
@@ -379,7 +449,10 @@ export class ReviewRunExecutor {
         })),
         raw_output: outcome.raw,
         memory_pulled: [],
-        specs_read: [],
+        // REQ-14 — EVERY attachment: injected ones as a bare path, skipped and
+        // dropped ones as path + reason. `[]` for a zero-attachment run, so
+        // such a run's trace document is unchanged too (AC-19's trace half).
+        specs_read: projectContext?.specsRead ?? [],
         // Persisted log = the run's FULL event buffer (incl. shared pre-work:
         // diff load + intent), not just events recorded inside this method.
         log: runLog.logFor(runId),

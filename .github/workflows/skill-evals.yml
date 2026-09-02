@@ -1,0 +1,145 @@
+# A/B evals for the skills in .claude/skills.
+#
+# Unlike every other workflow in this repo, this one calls a model: each run is a
+# `claude -p` invocation, and a full matrix costs roughly 0.9M tokens at five runs per
+# arm. That is why it is manual + weekly rather than per-PR, and why the default is two:
+# two screens whether a rule does anything, five is for trusting a small delta.
+#
+# The push trigger is the point of the whole thing: most skills here are vendored from
+# other people's GitHub repos and pinned by hash in skills-lock.json. When a hash moves,
+# this workflow answers "does the skill still earn its keep?" — for the security skill
+# (which is locally owned, not in the lockfile) the whole measured effect is reporting
+# discipline, and an edit could remove it silently.
+name: skill evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      skill:
+        description: Skill to evaluate (name under .claude/skills, or a path)
+        type: string
+        default: security
+      tier:
+        description: Case tier — leave empty to run every case in the suite
+        type: string
+        default: ''
+      runs:
+        description: Runs per arm per case — 2 screens a rule, raise to 5 to trust a small delta
+        type: string
+        default: '2'
+      model:
+        description: Model for the executor runs — an alias, or an OpenRouter id when provider=openrouter
+        type: string
+        default: opus
+      provider:
+        description: anthropic (gates are calibrated here) or openrouter (cheap, thresholds not calibrated)
+        type: choice
+        options: [anthropic, openrouter]
+        default: anthropic
+  schedule:
+    # Mondays 03:00 UTC — after any weekend skill updates, before the week starts.
+    - cron: '0 3 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'skills-lock.json'
+      - '.claude/skills/**'
+      - 'skill-evals/**'
+      - '.github/workflows/skill-evals.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    name: ${{ inputs.skill || 'security' }} A/B
+    runs-on: ubuntu-latest
+    # A single hung executor must not burn the default 6h budget.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Claude Code CLI
+        run: npm i -g @anthropic-ai/claude-code
+
+      - name: Install harness deps
+        working-directory: skill-evals
+        run: npm ci
+
+      # Fails fast and loudly rather than letting every run error one by one.
+      - name: Check auth
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.provider || 'anthropic' }}" = "openrouter" ]; then
+            test -n "${OPENROUTER_API_KEY:-}" || { echo "::error::OPENROUTER_API_KEY is not set"; exit 1; }
+            {
+              echo "ANTHROPIC_BASE_URL=https://openrouter.ai/api"
+              echo "ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY"
+              # Must be empty, not unset: the CLI prefers x-api-key over the bearer token.
+              echo "ANTHROPIC_API_KEY="
+              # Required, not tuning. The CLI defaults max_tokens to 32000 for a model id
+              # it does not recognise, and every OpenRouter id is unrecognised. OpenRouter
+              # bills the affordability check against max_tokens rather than actual usage,
+              # so the default makes every request fail with HTTP 402 unless the account
+              # can pre-fund 32000 output tokens. 16000 still fits a full review.
+              echo "CLAUDE_CODE_MAX_OUTPUT_TOKENS=16000"
+            } >> "$GITHUB_ENV"
+            echo "::warning::running on openrouter — the gate thresholds were calibrated on Claude, so read the deltas, not the pass/fail"
+          else
+            test -n "${ANTHROPIC_API_KEY:-}" || { echo "::error::ANTHROPIC_API_KEY is not set"; exit 1; }
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$GITHUB_ENV"
+          fi
+          claude --version
+
+      - name: Run evals
+        working-directory: skill-evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # --tier is omitted when empty. It used to default to data-flow, a tier that
+          # exists only in the security suite, so dispatching any other skill matched no
+          # cases and failed before the first run.
+          extra=()
+          tier="${{ inputs.tier }}"
+          # schedule and push carry no inputs. Fall back to the calibrated tier there
+          # rather than the whole suite: that trigger is a cost-bounded regression check
+          # (3 cases, not 6). A dispatch can still ask for everything by leaving it empty.
+          if [ -z "$tier" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            tier=data-flow
+          fi
+          [ -n "$tier" ] && extra+=(--tier "$tier")
+          npx tsx run.ts \
+            --skill "${{ inputs.skill || 'security' }}" \
+            "${extra[@]}" \
+            --runs "${{ inputs.runs || '2' }}" \
+            --model "${{ inputs.model || 'opus' }}" \
+            --concurrency 4 \
+            --out "results/ci-${{ github.run_id }}"
+
+      - name: Publish the benchmark to the job summary
+        if: always()
+        working-directory: skill-evals
+        run: |
+          f="results/ci-${{ github.run_id }}/benchmark.md"
+          [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY" || echo "no benchmark produced" >> "$GITHUB_STEP_SUMMARY"
+
+      # Reviews are the evidence behind a gate failure — keep them either way.
+      - name: Upload run output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-evals-${{ github.run_id }}
+          path: skill-evals/results/ci-${{ github.run_id }}/**
+          if-no-files-found: warn
+          retention-days: 30

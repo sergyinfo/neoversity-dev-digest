@@ -1,0 +1,338 @@
+import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
+import type { Db } from '../../db/client.js';
+import * as t from '../../db/schema.js';
+import { attachmentKey, type AttachmentRow, type AttachmentTargetKind } from './contract.js';
+
+/**
+ * L05 (S6) — Project Context data access. The ONLY layer touching the DB for
+ * this module.
+ *
+ * ## Storage shape vs wire shape
+ *
+ * The table carries two nullable FKs, `agent_id` and `skill_id`, with a CHECK
+ * that exactly one is set (plan R1 — a polymorphic `target_id` carries no FK
+ * and so cannot cascade, and §7 requires attachments to disappear with their
+ * agent or skill). The WIRE shape is `target_kind` + `target_id` (§10). The two
+ * are mapped HERE, at the repository boundary, so nothing above this file has
+ * to know which column is null.
+ *
+ * ## Tenancy
+ *
+ * Every query is scoped by `workspaceId` in SQL. Note that `agent_skills`
+ * carries no `workspace_id` of its own — it is a precedent for the ORDERING
+ * model only, never the tenancy model — so joins through it are scoped via the
+ * `skills` row or the attachment's own `workspace_id`.
+ */
+
+export type ContextAttachmentRow = typeof t.contextAttachments.$inferSelect;
+
+/** Storage row → wire shape. `target_kind` is DERIVED from which FK is set. */
+export function toAttachmentDto(row: ContextAttachmentRow): AttachmentRow {
+  const isAgent = row.agentId != null;
+  return {
+    id: row.id,
+    path: row.path,
+    repo_id: row.repoId,
+    target_kind: isAgent ? 'agent' : 'skill',
+    target_id: (isAgent ? row.agentId : row.skillId) as string,
+    order: row.order,
+    created_at: row.createdAt?.toISOString() ?? null,
+  };
+}
+
+/** One document a run would consider, already ordered. */
+export interface ResolvedAttachment {
+  id: string;
+  path: string;
+  repoId: string;
+  origin: 'agent' | 'skill';
+  viaSkillId: string | null;
+}
+
+export interface UsageCounts {
+  /** Repo-relative path → how many distinct agents use it (direct or inherited). */
+  byPath: Record<string, number>;
+  /** Skill id → how many agents have that skill LINKED (enabled or not, REQ-9). */
+  bySkill: Record<string, number>;
+}
+
+export class ProjectContextRepository {
+  constructor(private db: Db) {}
+
+  /** The repo row, workspace-scoped. `null` ⇒ the caller throws NotFoundError. */
+  async getRepo(
+    workspaceId: string,
+    repoId: string,
+  ): Promise<typeof t.repos.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(t.repos)
+      .where(and(eq(t.repos.id, repoId), eq(t.repos.workspaceId, workspaceId)));
+    return row ?? null;
+  }
+
+  /** Workspace-scoped existence check for an attach target. */
+  async targetExists(
+    workspaceId: string,
+    kind: AttachmentTargetKind,
+    id: string,
+  ): Promise<boolean> {
+    if (kind === 'agent') {
+      const [row] = await this.db
+        .select({ id: t.agents.id })
+        .from(t.agents)
+        .where(and(eq(t.agents.id, id), eq(t.agents.workspaceId, workspaceId)));
+      return !!row;
+    }
+    const [row] = await this.db
+      .select({ id: t.skills.id })
+      .from(t.skills)
+      .where(and(eq(t.skills.id, id), eq(t.skills.workspaceId, workspaceId)));
+    return !!row;
+  }
+
+  /** Attachments on one target, in injection order. */
+  async listForTarget(
+    workspaceId: string,
+    kind: AttachmentTargetKind,
+    targetId: string,
+  ): Promise<ContextAttachmentRow[]> {
+    const targetCol = kind === 'agent' ? t.contextAttachments.agentId : t.contextAttachments.skillId;
+    return this.db
+      .select()
+      .from(t.contextAttachments)
+      .where(
+        and(eq(t.contextAttachments.workspaceId, workspaceId), eq(targetCol, targetId)),
+      )
+      .orderBy(asc(t.contextAttachments.order), asc(t.contextAttachments.path));
+  }
+
+  /** Every attachment in one repo — the basis of the list's usage counts. */
+  async listForRepo(workspaceId: string, repoId: string): Promise<ContextAttachmentRow[]> {
+    return this.db
+      .select()
+      .from(t.contextAttachments)
+      .where(
+        and(
+          eq(t.contextAttachments.workspaceId, workspaceId),
+          eq(t.contextAttachments.repoId, repoId),
+        ),
+      );
+  }
+
+  async findById(workspaceId: string, id: string): Promise<ContextAttachmentRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(t.contextAttachments)
+      .where(
+        and(eq(t.contextAttachments.id, id), eq(t.contextAttachments.workspaceId, workspaceId)),
+      );
+    return row ?? null;
+  }
+
+  async countForTarget(
+    workspaceId: string,
+    kind: AttachmentTargetKind,
+    targetId: string,
+  ): Promise<number> {
+    const rows = await this.listForTarget(workspaceId, kind, targetId);
+    return rows.length;
+  }
+
+  async insert(values: {
+    workspaceId: string;
+    repoId: string;
+    kind: AttachmentTargetKind;
+    targetId: string;
+    path: string;
+    order: number;
+  }): Promise<ContextAttachmentRow> {
+    const [row] = await this.db
+      .insert(t.contextAttachments)
+      .values({
+        workspaceId: values.workspaceId,
+        repoId: values.repoId,
+        agentId: values.kind === 'agent' ? values.targetId : null,
+        skillId: values.kind === 'skill' ? values.targetId : null,
+        path: values.path,
+        order: values.order,
+      })
+      .returning();
+    return row!;
+  }
+
+  async deleteById(workspaceId: string, id: string): Promise<boolean> {
+    const rows = await this.db
+      .delete(t.contextAttachments)
+      .where(
+        and(eq(t.contextAttachments.id, id), eq(t.contextAttachments.workspaceId, workspaceId)),
+      )
+      .returning({ id: t.contextAttachments.id });
+    return rows.length > 0;
+  }
+
+  /** Set the position of one attachment. Ordering is per row, so two tabs
+   * reordering different documents do not clobber each other (§6 Concurrency). */
+  async setOrder(workspaceId: string, id: string, order: number): Promise<void> {
+    await this.db
+      .update(t.contextAttachments)
+      .set({ order })
+      .where(
+        and(eq(t.contextAttachments.id, id), eq(t.contextAttachments.workspaceId, workspaceId)),
+      );
+  }
+
+  /**
+   * Everything one agent would consider, in INJECTION ORDER: the agent's own
+   * attachments first, then those inherited from each ENABLED linked skill, in
+   * the skill's configured link order, then by attachment order.
+   *
+   * `skills.enabled = true` is filtered INSIDE the SQL, mirroring
+   * `reviews/repository/skill.repo.ts:17-26`, so no caller can forget it. REQ-6
+   * is a security-shaped rule — a skill toggled off in the UI must not reach the
+   * model — and a filter a caller can omit is not that rule.
+   *
+   * ## Deduped by `(repoId, path)` — fix-brief F3
+   *
+   * The two partial unique indexes on `context_attachments` are PER TARGET KIND
+   * (`db/schema/context.ts:183-219`), so nothing in the database prevents the
+   * same document being attached directly to the agent AND to a skill it links.
+   * Concatenating the two lists rendered it twice — as `spec-0` and `spec-1`
+   * with byte-identical bodies — and charged the budget twice, which can push a
+   * DIFFERENT document out. `usageCounts` already dedupes this exact
+   * configuration for display, so the page said 1 while the run sent 2.
+   *
+   * THE DIRECT ATTACHMENT WINS. It is the user's explicit choice for this
+   * agent, it is first in injection order already, and `origin: 'agent'` is
+   * what `usageCounts`' distinct-agent count has always implied. Reporting it
+   * as inherited would tell the user a skill is responsible for a document they
+   * attached themselves — and detaching the skill would then not remove it.
+   * Among two inherited copies the earlier skill link wins, for the same
+   * reason: it is the one the user's own ordering puts first.
+   */
+  async resolveForAgent(workspaceId: string, agentId: string): Promise<ResolvedAttachment[]> {
+    const direct = await this.db
+      .select({
+        id: t.contextAttachments.id,
+        path: t.contextAttachments.path,
+        repoId: t.contextAttachments.repoId,
+      })
+      .from(t.contextAttachments)
+      .where(
+        and(
+          eq(t.contextAttachments.workspaceId, workspaceId),
+          eq(t.contextAttachments.agentId, agentId),
+        ),
+      )
+      .orderBy(asc(t.contextAttachments.order), asc(t.contextAttachments.path));
+
+    const inherited = await this.db
+      .select({
+        id: t.contextAttachments.id,
+        path: t.contextAttachments.path,
+        repoId: t.contextAttachments.repoId,
+        skillId: t.contextAttachments.skillId,
+      })
+      .from(t.contextAttachments)
+      .innerJoin(t.skills, eq(t.skills.id, t.contextAttachments.skillId))
+      .innerJoin(t.agentSkills, eq(t.agentSkills.skillId, t.contextAttachments.skillId))
+      .where(
+        and(
+          eq(t.contextAttachments.workspaceId, workspaceId),
+          eq(t.agentSkills.agentId, agentId),
+          eq(t.skills.enabled, true),
+        ),
+      )
+      .orderBy(
+        asc(t.agentSkills.order),
+        asc(t.contextAttachments.order),
+        asc(t.contextAttachments.path),
+      );
+
+    const all: ResolvedAttachment[] = [
+      ...direct.map((r) => ({ ...r, origin: 'agent' as const, viaSkillId: null })),
+      ...inherited.map((r) => ({
+        id: r.id,
+        path: r.path,
+        repoId: r.repoId,
+        origin: 'skill' as const,
+        viaSkillId: r.skillId,
+      })),
+    ];
+
+    // First occurrence wins — the concatenation above is already in injection
+    // order, so "first" is "direct, then the earliest skill link".
+    const seen = new Set<string>();
+    return all.filter((a) => {
+      const key = attachmentKey(a.repoId, a.path);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  /**
+   * REQ-9's two counts. A NUMBER only (D-3) — no history, no timestamps.
+   *
+   * The per-document count is over DISTINCT agents, because an agent that both
+   * attaches a document directly and inherits it through a skill still uses it
+   * once. Computed in JS over two small scoped queries rather than in one SQL
+   * UNION: the input is bounded by 20 attachments per target and the intent —
+   * "distinct agents" — reads directly.
+   */
+  async usageCounts(workspaceId: string, repoId: string): Promise<UsageCounts> {
+    const direct = await this.db
+      .select({ path: t.contextAttachments.path, agentId: t.contextAttachments.agentId })
+      .from(t.contextAttachments)
+      .where(
+        and(
+          eq(t.contextAttachments.workspaceId, workspaceId),
+          eq(t.contextAttachments.repoId, repoId),
+          isNotNull(t.contextAttachments.agentId),
+        ),
+      );
+
+    const inherited = await this.db
+      .select({ path: t.contextAttachments.path, agentId: t.agentSkills.agentId })
+      .from(t.contextAttachments)
+      .innerJoin(t.skills, eq(t.skills.id, t.contextAttachments.skillId))
+      .innerJoin(t.agentSkills, eq(t.agentSkills.skillId, t.contextAttachments.skillId))
+      .where(
+        and(
+          eq(t.contextAttachments.workspaceId, workspaceId),
+          eq(t.contextAttachments.repoId, repoId),
+          eq(t.skills.enabled, true),
+        ),
+      );
+
+    const pairs = new Set<string>();
+    for (const r of [...direct, ...inherited]) {
+      // A NUL separator, for the reason `attachmentKey` (contract.ts) gives:
+      // it is the one byte that cannot appear in either component, because
+      // `isSafeRelPath` rejects any path containing one. A SPACE would not do
+      // — paths with spaces are ordinary, and splitting on the first one would
+      // bucket `docs/my notes.md` under `docs/my` (fix-brief F8, contested:
+      // this already was a NUL). Written as an ESCAPE rather than a literal
+      // byte: a raw 0x00 makes the whole file `data` to grep, which silently
+      // hides every match in it and is what made the byte look like a space.
+      if (r.agentId) pairs.add(`${r.path}\u0000${r.agentId}`);
+    }
+    const byPath: Record<string, number> = {};
+    for (const key of pairs) {
+      const path = key.slice(0, key.indexOf('\u0000'));
+      byPath[path] = (byPath[path] ?? 0) + 1;
+    }
+
+    const skillLinks = await this.db
+      .select({ skillId: t.agentSkills.skillId, n: sql<number>`count(*)::int` })
+      .from(t.agentSkills)
+      .innerJoin(t.skills, eq(t.skills.id, t.agentSkills.skillId))
+      .where(eq(t.skills.workspaceId, workspaceId))
+      .groupBy(t.agentSkills.skillId);
+
+    const bySkill: Record<string, number> = {};
+    for (const r of skillLinks) bySkill[r.skillId] = Number(r.n);
+
+    return { byPath, bySkill };
+  }
+}

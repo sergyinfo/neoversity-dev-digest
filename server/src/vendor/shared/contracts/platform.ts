@@ -257,11 +257,31 @@ export const PrCommentInput = z.object({
 export type PrCommentInput = z.infer<typeof PrCommentInput>;
 
 // ---- Project Context ----
+/**
+ * One discoverable project-context document in a repo's local clone.
+ *
+ * The last three fields are additive and all `.nullish()`: a producer that
+ * cannot compute one omits it, and every consumer renders "—" rather than
+ * substituting 0 — an unknown token cost is not a free document, and an
+ * unknown usage count is not "used by nobody".
+ *
+ * `tokens_exact` is DELIBERATELY ABSENT although the spec's contract table
+ * lists it. The `Tokenizer` interface exposes only `count(text)` and
+ * `TiktokenTokenizer.broken` is private, so the flag is not derivable here, and
+ * the UI is required to label the figure as an estimate unconditionally. Do not
+ * add it without first making exactness observable.
+ */
 export const SpecFile = z.object({
   path: z.string(),
   content: z.string().nullish(),
   size: z.number().int().nullish(),
   updated_at: z.string().nullish(),
+  /** Approximate prompt cost. Absent ⇒ show "—" and exclude from the total. */
+  tokens_estimate: z.number().int().nullish(),
+  /** Over the per-document byte cap: listed and marked, but not attachable. */
+  over_cap: z.boolean().nullish(),
+  /** Agents using it directly or via an enabled linked skill. Absent ⇒ "—", not 0. */
+  used_by_count: z.number().int().nullish(),
 });
 export type SpecFile = z.infer<typeof SpecFile>;
 

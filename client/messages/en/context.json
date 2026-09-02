@@ -9,8 +9,8 @@
   "loadError": "Couldn’t load specs",
   "kb": "{kb}kb",
   "empty": {
-    "title": "No spec files yet",
-    "body": "Drop your PRDs, tech specs, and acceptance criteria under .devdigest/specs/. Every agent and the PR brief read them as grounding context."
+    "title": "No documents found",
+    "body": "No markdown was found under this repository's docs, doc, specs, spec, plans, plan or rfcs directories, or under .devdigest/specs/. Attach documents you add there to specific agents or skills from this page — only the ones you attach are sent to a review."
   },
   "mode": {
     "preview": "preview",
@@ -20,5 +20,39 @@
     "loadError": "Couldn’t load spec",
     "save": "Save",
     "saving": "Saving…"
+  },
+  "tabs": {
+    "agents": "Agents",
+    "skills": "Skills"
+  },
+  "tokensTotal": "{count} tokens",
+  "estimateMarker": "estimated",
+  "budgetFraction": "{used} / {total} tokens",
+  "capped": {
+    "title": "List capped",
+    "body": "Showing the first documents found — this repository has more than can be listed at once."
+  },
+  "reason": {
+    "not_cloned": "This repository hasn’t been cloned yet.",
+    "clone_missing": "The local clone is missing on disk. Resync the repository to restore it."
+  },
+  "origin": {
+    "agent": "Direct",
+    "skill": "Inherited via skill"
+  },
+  "outcome": {
+    "injected": "Injected",
+    "dropped_budget": "Dropped (over budget)",
+    "skipped": "Skipped"
+  },
+  "projection": {
+    "noAgent": {
+      "title": "No agent selected",
+      "body": "Choose an agent to see a projected token cost for a run."
+    },
+    "unavailable": "The projection isn’t available right now — showing per-document estimates only.",
+    "skillContribution": "{count} tokens across its attached documents",
+    "disabledSkillsLabel": "Linked but disabled — contributes nothing",
+    "notContributing": "{name} (disabled — not contributing)"
   }
 }

@@ -1,0 +1,12 @@
+{
+  "name": "blogapp-posts",
+  "version": "4.0.1",
+  "private": true,
+  "main": "src/index.js",
+  "dependencies": {
+    "express": "4.21.2",
+    "express-rate-limit": "7.4.0",
+    "jsonwebtoken": "9.0.2",
+    "mongoose": "8.9.5"
+  }
+}

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   uuid,
@@ -9,9 +10,13 @@ import {
   vector,
   index,
   uniqueIndex,
+  check,
 } from 'drizzle-orm/pg-core';
+import { now } from './_shared';
 import { workspaces } from './core';
 import { repos } from './repos';
+import { agents } from './agents';
+import { skills } from './skills';
 
 // ============================================================ Context & codebase
 
@@ -124,3 +129,91 @@ export const onboarding = pgTable('onboarding', {
   json: jsonb('json').notNull(),
   generatedAt: timestamp('generated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * `context_attachments` — L05 Project Context. One row = one repo document
+ * attached to one agent OR one skill.
+ *
+ * ## Why two nullable FKs instead of a polymorphic `target_id` (plan R1)
+ *
+ * §7 requires an attachment to disappear with the agent or skill it is attached
+ * to. A single polymorphic `target_id` column cannot carry a foreign key, so it
+ * cannot cascade — the lifecycle would have to be enforced in application code
+ * and would silently rot. Instead the table carries BOTH `agent_id` and
+ * `skill_id` as nullable FKs, each `ON DELETE CASCADE`, and a CHECK asserts
+ * that exactly one of them is set:
+ *
+ *     CHECK (num_nonnulls(agent_id, skill_id) = 1)
+ *
+ * `target_kind`/`target_id` remain the WIRE shape (§10, module `contract.ts`);
+ * the two-column form is the STORAGE shape, mapped at the repository boundary.
+ *
+ * ## Why two PARTIAL unique indexes, not one four-column one (cross-review F1)
+ *
+ * In a standard Postgres unique index NULL is distinct from NULL, so a unique
+ * index on `(agent_id, skill_id, repo_id, path)` would happily admit two
+ * IDENTICAL agent attachments — both carrying `skill_id = NULL`. `db:generate`
+ * would succeed and the duplicate would land. The real invariant is two rules,
+ * one per target kind, and that is what is declared here.
+ *
+ * `UNIQUE NULLS NOT DISTINCT` was available (this deployment is PG16 —
+ * `docker-compose.yml:5`, `test/helpers/pg.ts:36`) and was rejected on MEANING,
+ * not capability: it yields the right answer only BECAUSE the `num_nonnulls`
+ * CHECK guarantees exactly one column is non-null, so relaxing that CHECK would
+ * silently change the uniqueness rule. The partial indexes state the invariant
+ * directly, and each doubles as the lookup index for its target kind
+ * (`resolveForAgent` queries by `agent_id`).
+ *
+ * Note also that `nullsNotDistinct()` lives on the table CONSTRAINT builder
+ * (`pg-core/unique-constraint.d.ts:10`), not on `uniqueIndex()` — reaching for
+ * it here is a typecheck error.
+ *
+ * ## `order`
+ *
+ * Named `order` to match both the wire field (`AttachmentInput.order`) and the
+ * existing `agent_skills.order` precedent. It IS a SQL reserved word, but
+ * drizzle quotes every identifier it emits (`"order" integer` already ships in
+ * `0000_init.sql:22`), so this is a naming-clarity call rather than a defect.
+ * Any hand-written raw SQL touching it must quote it.
+ *
+ * `workspace_id` is carried per the repo-wide tenancy rule — note that
+ * `agent_skills` does NOT carry one, so it is a precedent for the ordering
+ * model only, never for tenancy.
+ */
+export const contextAttachments = pgTable(
+  'context_attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** The repo the path was discovered in. A path is meaningless without it. */
+    repoId: uuid('repo_id')
+      .notNull()
+      .references(() => repos.id, { onDelete: 'cascade' }),
+    /** Exactly one of `agentId` / `skillId` is non-null — see the CHECK below. */
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id').references(() => skills.id, { onDelete: 'cascade' }),
+    /** Repo-relative POSIX path, as listed by the discovery walk. */
+    path: text('path').notNull(),
+    /** Position within the section, ascending. Resolved on the way in. */
+    order: integer('order').notNull().default(0),
+    createdAt: now(),
+  },
+  (t) => ({
+    /** §7: exactly one target. The premise the partial indexes rest on. */
+    targetCk: check(
+      'ctx_att_one_target_ck',
+      sql`num_nonnulls(${t.agentId}, ${t.skillId}) = 1`,
+    ),
+    /** F1: NULL-safe uniqueness per target kind; also the agent lookup index. */
+    agentUq: uniqueIndex('ctx_att_agent_repo_path_uq')
+      .on(t.agentId, t.repoId, t.path)
+      .where(sql`agent_id is not null`),
+    skillUq: uniqueIndex('ctx_att_skill_repo_path_uq')
+      .on(t.skillId, t.repoId, t.path)
+      .where(sql`skill_id is not null`),
+    /** Tenancy-scoped listing for one repo. */
+    wsRepoIdx: index('ctx_att_ws_repo_idx').on(t.workspaceId, t.repoId),
+  }),
+);

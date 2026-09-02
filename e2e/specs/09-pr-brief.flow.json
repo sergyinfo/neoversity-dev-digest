@@ -1,0 +1,36 @@
+{
+  "name": "PR detail Overview renders the seeded Why & Risk brief and its review-focus navigation",
+  "description": "From PR #482, confirm the Why & Risk card (S15/S16) renders the seeded brief on the Overview tab — title, the seeded 'what' statement, and the risk level as a word (AC-27) — then activate its first review-focus entry (src/config.ts:12, matching the seeded finding) and confirm it opens the Files changed tab with the seeded diff line in view (AC-29's navigation half, per BQ-5/A). The card's review-focus entry is a real <button> whose visible path is middle-truncated and aria-hidden, with the full 'path:line — reason' text in a visually-hidden span that forms its accessible name (WhyRiskCard.tsx FocusRow) — so it is targeted by role + accessible name, not by its visible text, mirroring the tab-switch pattern already used in 04/05. The flow never presses generate (no POST /pulls/:id/brief), which is how AC-34 (no LLM call) is satisfied structurally rather than by an environment guard — the seeded pr_brief row (S18) is read as a clean cache hit (out_of_date: false). It then returns to the list and opens the SECOND seeded PR, #613 'Bump pino to 9.4.0', which is seeded with pr_files but deliberately with NO pr_brief row, and asserts the empty state, its hint and the generate control (AC-28) — the generate control is read with `find role button text`, never clicked, because `find`'s default action is click and pressing it would be the one thing that makes a POST /pulls/:id/brief and breaks AC-34. #613 exists because AC-28's given ('a PR with no stored brief') cannot hold on #482, which is seeded WITH one; it is a second PR in the SAME repo, not a second repo, so flow 01's first-repo redirect is untouched, and its title shares no substring with any other flow's text locator. Read-only seeded data. Assumes a freshly-seeded DB (see e2e/README.md).",
+  "steps": [
+    { "cmd": ["open", "{BASE}/"], "label": "load the app root" },
+    { "cmd": ["wait", "--url", "/pulls"], "label": "land on the PR list" },
+    { "cmd": ["find", "text", "Add rate limiting to public API endpoints", "click"], "label": "open the PR row" },
+    { "cmd": ["wait", "--url", "/pulls/482"], "label": "navigate to the PR detail route" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "PR detail data settles" },
+    { "cmd": ["wait", "--text", "WHY & RISK"], "label": "the Why & Risk card renders on the Overview tab (AC-27) — SectionLabel is CSS text-transform: uppercase" },
+    { "cmd": ["wait", "--text", "Adds a token-bucket rate limiter"], "label": "the seeded 'what' statement renders (AC-27)" },
+    { "cmd": ["wait", "--text", "RISK LEVEL"], "label": "the risk level label renders (also CSS-uppercased)" },
+    { "cmd": ["wait", "--text", "High"], "label": "the risk level renders as a word, not colour alone (AC-27) — the Badge itself is not uppercased" },
+    {
+      "cmd": ["find", "role", "button", "click", "--name", "src/config.ts:12 — Hardcoded Stripe secret key in commit"],
+      "label": "activate the first review-focus entry by its accessible name (AC-29)"
+    },
+    { "cmd": ["wait", "--url", "tab=diff"], "label": "the Files changed tab opens at src/config.ts (AC-29)" },
+    { "cmd": ["wait", "--text", "stripeSecretKey"], "label": "the seeded patch's new-side line 12 is rendered in the diff (AC-29's navigation half, BQ-5/A)" },
+
+    { "cmd": ["open", "{BASE}/"], "label": "AC-28 — back to the PR list for the PR that has NO brief" },
+    { "cmd": ["wait", "--url", "/pulls"], "label": "land on the PR list" },
+    { "cmd": ["wait", "--text", "Bump pino to 9.4.0"], "label": "the second seeded PR row is visible (seed.ts #613, no pr_brief row)" },
+    { "cmd": ["find", "text", "Bump pino to 9.4.0", "click"], "label": "open the brief-less PR row" },
+    { "cmd": ["wait", "--url", "/pulls/613"], "label": "navigate to that PR's detail route" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "PR detail data settles — GET /pulls/:id/brief has answered by now" },
+    { "cmd": ["wait", "--text", "WHY & RISK"], "label": "the Why & Risk card still renders, in its empty state (AC-28)" },
+    { "cmd": ["wait", "--text", "Brief not available yet."], "label": "AC-28 — the shipped brief.unavailable empty state renders" },
+    { "cmd": ["wait", "--text", "Generate a brief to see what this PR changes"], "label": "AC-28 — and its rewritten hint (brief.unavailableHint, F-6)" },
+    {
+      "cmd": ["find", "role", "button", "text", "--name", "Generate brief"],
+      "assert": { "stdoutIncludes": "Generate brief" },
+      "label": "AC-28/AC-34 — the generate control renders as a real button, read with the `text` ACTION and never clicked: `find`'s default action is click, so the action is stated explicitly to keep the flow LLM-free"
+    }
+  ]
+}

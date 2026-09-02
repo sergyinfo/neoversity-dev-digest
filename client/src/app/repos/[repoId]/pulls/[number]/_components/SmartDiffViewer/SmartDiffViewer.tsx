@@ -16,6 +16,7 @@ export function SmartDiffViewer({
   files,
   commenting,
   onOpenFinding,
+  focus,
 }: {
   smartDiff: SmartDiff;
   /** The raw PR files — Smart Diff carries paths and stats, not patch text. */
@@ -27,6 +28,12 @@ export function SmartDiffViewer({
    * component does not fetch — so the owner does it and passes the handler in.
    */
   onOpenFinding?: (path: string, line: number) => void;
+  /**
+   * Open one file at a line, matched by path. Passed straight through to the
+   * `FileCard`s: the grouping changes which section a file sits in, never
+   * whether it can be focused.
+   */
+  focus?: { file: string; line?: number };
 }) {
   // The API returns paths; the patch to render still comes from the PR payload
   // the page already has. Keeping them separate means Smart Diff never has to
@@ -68,6 +75,7 @@ export function SmartDiffViewer({
                       commenting={commenting}
                       defaultOpen={defaultOpenFor(role, f.finding_lines.length)}
                       findingLines={f.finding_lines}
+                      focus={focus?.file === f.path ? { line: focus.line } : undefined}
                       onOpenFindings={
                         onOpenFinding && f.finding_lines.length > 0
                           ? () => onOpenFinding(f.path, f.finding_lines[0]!)

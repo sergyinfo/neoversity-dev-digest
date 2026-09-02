@@ -14,9 +14,16 @@ import { FileCard } from "../FileCard";
 export function DiffViewer({
   files,
   commenting,
+  focus,
 }: {
   files: PrFile[];
   commenting?: DiffCommentApi;
+  /**
+   * Open one file at a line. Matched by path against the files rendered here; a
+   * path this diff does not contain focuses nothing, which is the caller's cue
+   * to say so — this component only renders what it was given.
+   */
+  focus?: { file: string; line?: number };
 }) {
   const t = useTranslations("shell");
   if (!files || files.length === 0) {
@@ -25,7 +32,12 @@ export function DiffViewer({
   return (
     <div style={s.list}>
       {files.map((f, i) => (
-        <FileCard key={i} file={f} commenting={commenting} />
+        <FileCard
+          key={i}
+          file={f}
+          commenting={commenting}
+          focus={focus?.file === f.path ? { line: focus.line } : undefined}
+        />
       ))}
     </div>
   );

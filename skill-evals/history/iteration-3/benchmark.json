@@ -1,0 +1,749 @@
+{
+  "metadata": {
+    "skill_name": "security",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-08-29T19:17:57Z",
+    "evals_run": [
+      3,
+      4,
+      5
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 230.0,
+        "tokens": 23375,
+        "tool_calls": 8,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the normalizeIdentifier passthrough on login, the missing returns in requireAuth, and PATCH /me picking ALLOWED_PROFILE_FIELDS",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-1, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "7 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 7 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 2,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 248.2,
+        "tokens": 21975,
+        "tool_calls": 11,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the normalizeIdentifier passthrough on login, the missing returns in requireAuth, and PATCH /me picking ALLOWED_PROFILE_FIELDS",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-2, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "5 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 5 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 3,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 235.4,
+        "tokens": 19131,
+        "tool_calls": 9,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the normalizeIdentifier passthrough on login, the missing returns in requireAuth, and PATCH /me picking ALLOWED_PROFILE_FIELDS",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-3, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "6 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 6 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 149.0,
+        "tokens": 13664,
+        "tool_calls": 11,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the exec() command injection reached only from exportBranded, the ownership check against req.body.authorId, and the unescaped RegExp in buildFilter",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-1, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "5 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 5 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "with_skill",
+      "run_number": 2,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 115.7,
+        "tokens": 10959,
+        "tool_calls": 6,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the exec() command injection reached only from exportBranded, the ownership check against req.body.authorId, and the unescaped RegExp in buildFilter",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-2, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "3 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 3 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "with_skill",
+      "run_number": 3,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 188.2,
+        "tokens": 17540,
+        "tool_calls": 9,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the exec() command injection reached only from exportBranded, the ownership check against req.body.authorId, and the unescaped RegExp in buildFilter",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-3, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "5 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 5 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 152.5,
+        "tokens": 15573,
+        "tool_calls": 9,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the raw post.body in dangerouslySetInnerHTML, the endsWith CORS match, and the safeUrl scheme denylist",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-1, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "5 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 5 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "with_skill",
+      "run_number": 2,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 160.9,
+        "tokens": 12053,
+        "tool_calls": 9,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the raw post.body in dangerouslySetInnerHTML, the endsWith CORS match, and the safeUrl scheme denylist",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-2, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "4 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 4 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "with_skill",
+      "run_number": 3,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 144.4,
+        "tokens": 15533,
+        "tool_calls": 8,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the raw post.body in dangerouslySetInnerHTML, the endsWith CORS match, and the safeUrl scheme denylist",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-3, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": true,
+          "evidence": "4 findings, none rated LOW/Info; below-the-bar items sit in a separate notes section."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 4 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 222.6,
+        "tokens": 24523,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the normalizeIdentifier passthrough on login, the missing returns in requireAuth, and PATCH /me picking ALLOWED_PROFILE_FIELDS",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-1, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "12 findings, of which 4 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 12 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 2,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 206.4,
+        "tokens": 23532,
+        "tool_calls": 6,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the normalizeIdentifier passthrough on login, the missing returns in requireAuth, and PATCH /me picking ALLOWED_PROFILE_FIELDS",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-2, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "12 findings, of which 5 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 12 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 3,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 219.0,
+        "tokens": 20312,
+        "tool_calls": 6,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the normalizeIdentifier passthrough on login, the missing returns in requireAuth, and PATCH /me picking ALLOWED_PROFILE_FIELDS",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-3, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "10 findings, of which 4 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 10 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 145.5,
+        "tokens": 16889,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the exec() command injection reached only from exportBranded, the ownership check against req.body.authorId, and the unescaped RegExp in buildFilter",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-1, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "10 findings, of which 4 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 10 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "without_skill",
+      "run_number": 2,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 155.4,
+        "tokens": 17760,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the exec() command injection reached only from exportBranded, the ownership check against req.body.authorId, and the unescaped RegExp in buildFilter",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-2, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "9 findings, of which 4 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 9 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "without_skill",
+      "run_number": 3,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 118.0,
+        "tokens": 13245,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the exec() command injection reached only from exportBranded, the ownership check against req.body.authorId, and the unescaped RegExp in buildFilter",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-3, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "8 findings, of which 3 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 8 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 160.8,
+        "tokens": 19032,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the raw post.body in dangerouslySetInnerHTML, the endsWith CORS match, and the safeUrl scheme denylist",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-1, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "9 findings, of which 3 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 9 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "without_skill",
+      "run_number": 2,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 145.9,
+        "tokens": 14466,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the raw post.body in dangerouslySetInnerHTML, the endsWith CORS match, and the safeUrl scheme denylist",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-2, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "9 findings, of which 4 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 9 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 5,
+      "configuration": "without_skill",
+      "run_number": 3,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 158.9,
+        "tokens": 17742,
+        "tool_calls": 4,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "All three planted issues are reported: the raw post.body in dangerouslySetInnerHTML, the endsWith CORS match, and the safeUrl scheme denylist",
+          "passed": true,
+          "evidence": "All three plant signatures present in the findings section of run-3, verified by pattern match over the review text rather than the executor's self-report."
+        },
+        {
+          "text": "No control that is correct as written is filed as a finding (the named decoys for this case)",
+          "passed": true,
+          "evidence": "No finding title names a decoy control as broken. Where a decoy file appears in a low-severity row it is for an adjacent real gap (missing iss/aud claims; client-only sanitization), not a claim that the control fails."
+        },
+        {
+          "text": "No item rated LOW or Info appears in the findings list \u2014 the skill's rule is LOW -> do not report",
+          "passed": false,
+          "evidence": "10 findings, of which 3 are rated LOW/Info inside the findings list itself."
+        },
+        {
+          "text": "Every reported finding carries a file path, a line or code reference, a severity, and a concrete fix",
+          "passed": true,
+          "evidence": "All 10 findings carry a location, a severity label and a fix block."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 180.4778,
+        "stddev": 47.1295,
+        "min": 115.7,
+        "max": 248.2
+      },
+      "tokens": {
+        "mean": 16644.7778,
+        "stddev": 4262.8067,
+        "min": 10959,
+        "max": 23375
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.75,
+        "stddev": 0.0,
+        "min": 0.75,
+        "max": 0.75
+      },
+      "time_seconds": {
+        "mean": 170.2778,
+        "stddev": 36.7391,
+        "min": 118.0,
+        "max": 222.6
+      },
+      "tokens": {
+        "mean": 18611.2222,
+        "stddev": 3752.6366,
+        "min": 13245,
+        "max": 24523
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.25",
+      "time_seconds": "+10.2",
+      "tokens": "-1966"
+    }
+  },
+  "notes": []
+}
