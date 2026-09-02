@@ -1,0 +1,58 @@
+import type { CSSProperties } from "react";
+
+/** Co-located styles for the eval-run compare modal (L06, S11). */
+export const s = {
+  body: { padding: "16px 18px", maxHeight: 560, overflow: "auto" } satisfies CSSProperties,
+  metricsRow: { display: "flex", gap: 12, marginBottom: 18 } satisfies CSSProperties,
+  metricCard: {
+    flex: 1,
+    padding: "12px 14px",
+    borderRadius: 9,
+    border: "1px solid var(--border)",
+    background: "var(--bg-elevated)",
+  } satisfies CSSProperties,
+  metricLabel: {
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+    color: "var(--text-muted)",
+    textTransform: "uppercase",
+    marginBottom: 8,
+  } satisfies CSSProperties,
+  metricValues: { display: "flex", alignItems: "baseline", gap: 8 } satisfies CSSProperties,
+  oldValue: { fontSize: 15, color: "var(--text-muted)" } satisfies CSSProperties,
+  newValue: { fontSize: 21, fontWeight: 700 } satisfies CSSProperties,
+  delta: { fontSize: 11.5, fontWeight: 600 } satisfies CSSProperties,
+  sectionTitle: { fontSize: 13, fontWeight: 700, marginBottom: 8 } satisfies CSSProperties,
+  legend: { display: "flex", gap: 14, fontSize: 11.5, color: "var(--text-secondary)", margin: "8px 0 10px" } satisfies CSSProperties,
+  legendItem: { display: "inline-flex", alignItems: "center", gap: 6 } satisfies CSSProperties,
+  legendSwatch: { width: 11, height: 11, borderRadius: 3 } satisfies CSSProperties,
+  diffBox: {
+    fontFamily: "var(--font-mono, monospace)",
+    fontSize: 12.5,
+    lineHeight: 1.75,
+    background: "var(--code-bg)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: "14px 16px",
+    whiteSpace: "pre-wrap",
+  } satisfies CSSProperties,
+  note: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 16,
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "1px solid var(--warn)",
+    background: "var(--warn-bg)",
+    fontSize: 12.5,
+    color: "var(--text-secondary)",
+  } satisfies CSSProperties,
+  unavailable: {
+    padding: "24px 8px",
+    textAlign: "center",
+    fontSize: 13,
+    color: "var(--text-muted)",
+  } satisfies CSSProperties,
+} as const;

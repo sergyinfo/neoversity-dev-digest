@@ -1,6 +1,6 @@
 /* AgentEditor — agent config + linked skills. L02 adds the Skills tab; L05
-   adds the read-only Context tab (BQ-2/b); Evals, Stats and CI come with
-   later lessons.
+   adds the read-only Context tab (BQ-2/b); L06 adds the Evals tab; Stats and
+   CI come with later lessons.
    Tab state still lives in ?tab= for forward-compatibility. */
 "use client";
 
@@ -11,6 +11,7 @@ import type { Agent } from "@devdigest/shared";
 import { ConfigTab } from "./_components/ConfigTab";
 import { SkillsTab } from "./_components/SkillsTab";
 import { ContextTab } from "./_components/ContextTab";
+import { EvalsTab } from "./_components/EvalsTab";
 import { TABS } from "./constants";
 import { s } from "./styles";
 
@@ -25,6 +26,7 @@ const TAB_PANELS: Record<string, (agent: Agent) => React.ReactElement> = {
   config: (agent) => <ConfigTab agent={agent} />,
   skills: (agent) => <SkillsTab agent={agent} />,
   context: (agent) => <ContextTab agent={agent} />,
+  evals: (agent) => <EvalsTab agent={agent} />,
 };
 
 export function AgentEditor({ agent, tab, onTab }: { agent: Agent; tab: string; onTab: (t: string) => void }) {
