@@ -101,56 +101,51 @@ are priced differently on purpose.
 
 ## On CI
 
-Two workflows, and the split between them is the point.
+**One workflow: `skill-evals.yml`.** Manual and weekly, on Claude, 2 runs per arm, hard
+gates. Its most valuable trigger is a push to `skills-lock.json` or `.claude/skills/**`:
+skills are vendored from other people's repos, and an upstream rewrite could remove the
+only effect a skill actually has.
 
-**`evals-pr.yml` — screening, per PR.** `skill-evals/ci/plan.mjs` reads
-`git diff --name-only` and routes: a changed skill runs its own suite, a changed
-`CLAUDE.md` runs the repo-guide suite, a changed agent runs that agent's suite. One run
-per arm on `anthropic/claude-haiku-4.5` (28s per run against Opus's 145s); the repo-guide
-check runs on `google/gemini-3.6-flash`. Model policy lives in the `env:` block at the top
-of the workflow, with the measurement behind each choice.
+**Per-PR routing is not here.** It lives in `evals/scripts/ci-detect.mjs`, which decides
+from the diff which suites run and names what it skipped. This package used to carry a
+second router (`ci/plan.mjs` + `evals-pr.yml`); both were removed when the two systems were
+folded into one, because they triggered on the same paths and every PR paid twice. To see
+what CI will run:
+
+```bash
+CHANGED_FILES="$(git diff --name-only --diff-filter=d main...HEAD)" node evals/scripts/ci-detect.mjs
+```
+
+Note it reads the changed files from an environment variable, not stdin — the obvious pipe
+silently reports "0 changed files" and routes nothing.
+
+**What this package is for, and `evals/` is not:** the A/B. `evals/` judges one output
+against written practices; this measures the *delta* a skill makes — two arms, plant
+categories, controls, and gates on the difference. Nothing else in the repo answers "does
+this skill earn its keep".
+
+One executor run is capped at 15 minutes (`EVAL_RUN_TIMEOUT_MIN`). A gateway that accepts
+the connection but never answers does not fail — it hangs, and without a cap a few such
+runs eat the whole CI job and leave no benchmark to explain why. A timed-out run is counted
+as errored, which the gates report.
 
 Executor models are picked by running them, not from the price table.
 `deepseek/deepseek-v4-pro` looked right on cost and failed on reliability: 3 of 6 runs
 ended the turn without ever calling `Write`. That failure is not neutral between the arms —
 it lands more often on the baseline, which has no step-by-step skill holding it on task, so
-it inflates the delta in the skill's favour. See
-`history/iteration-12-openrouter-models/`.
+it inflates the delta in the skill's favour. See `history/iteration-12-openrouter-models/`.
 
-**Anything without a suite is skipped, named in the job summary, and is not a failure** —
-today that is 10 of 13 skills, all 8 agents, and the repo guides. Check the routing before
-pushing:
-
-```bash
-git diff --name-only --diff-filter=d main...HEAD | node skill-evals/ci/plan.mjs
-```
-
-One executor run is capped at 15 minutes (`EVAL_RUN_TIMEOUT_MIN`). A gateway that
-accepts the connection but never answers does not fail — it hangs, and without a cap a
-few such runs eat the whole CI job and leave no benchmark to explain why. A timed-out run
-is counted as errored, which the gates report.
-
-A failed gate on a PR is a **warning**, not a blocked merge: one screening run per arm has
-too much variance to block on. What does fail the job is a missing `benchmark.json` —
-that means the harness never reached a verdict, which is a broken runner or a dead
-endpoint rather than a quality signal.
-
-**`skill-evals.yml` — the verdict.** Manual and weekly, on Claude, 2 runs per arm, hard
-gates. The thresholds in every suite were calibrated on Opus, so a cheap-model run tells
-you about deltas, not about pass/fail. Its most valuable trigger is a push to
-`skills-lock.json` or `.claude/skills/**`: skills are vendored from other people's repos,
-and an upstream rewrite could remove the only effect a skill actually has.
-
-Both accept `provider: openrouter`, which points the Claude Code CLI at OpenRouter's
-Anthropic-shaped endpoint (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, with
-`ANTHROPIC_API_KEY` explicitly empty — the CLI prefers `x-api-key` when both are set).
-Needs an `OPENROUTER_API_KEY` repository secret.
+`provider: openrouter` points the Claude Code CLI at OpenRouter's Anthropic-shaped endpoint
+(`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, with `ANTHROPIC_API_KEY` explicitly empty —
+the CLI prefers `x-api-key` when both are set). Needs an `OPENROUTER_API_KEY` secret, and
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, which the workflow sets: the CLI defaults `max_tokens` to
+32000 for an unrecognised model id and OpenRouter bills its affordability check against
+that number, so without it every request fails with HTTP 402.
 
 ## Layout
 
 ```
 run.ts                runner, grader, gates — suite-agnostic
-ci/plan.mjs           changed files -> which suites CI runs, and what it skips
 suites/               suites for things that are not skills (repo guides, agents)
 fixtures/             shared fixtures not owned by one skill
 history/              analysis.md + benchmark.md per iteration, kept in git
