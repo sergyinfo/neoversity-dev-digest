@@ -4,7 +4,7 @@ Started: 2026-09-02 · Branch: `lesson-07/eval-pipeline` · Mode: multi-agent (T
 Plan: `docs/plans/eval-pipeline.md` · Spec: `specs/eval-pipeline.md` (approved)
 Cross-review: `docs/plans/eval-pipeline.cross-review.md`
 
-**Agent ceiling:** 10 (the plan's declared envelope). **Agents launched so far: 1** (T0).
+**Agent ceiling:** 10 (the plan's declared envelope). **Agents launched so far: 5** (T0, T3, T1, T4, T2a).
 **Commit policy:** per stage. **doc-writer at the end:** yes (T5 is a plan track).
 All Stage-0 decisions were taken as the recommended option, on the user's standing
 instruction to proceed automatically.
@@ -14,7 +14,7 @@ instruction to proceed automatically.
 | # | Stage | Status | Artefact / result |
 |---|---|---|---|
 | 0 | intake & baseline | **done** | tree clean; design mockup committed; baseline fully green (801 tests) |
-| 1 | implementation (T0–T5) | in progress | T0 (envelope freeze) launched |
+| 1 | implementation (T0–T5) | in progress | T0 done (+19 tests) · T3 done (+5) · T1 done (+37 unit, +13 integration) · T4 and T2a running |
 | 2 | review (3 lenses) | not started | |
 | 3 | fix loop (≤2 rounds) | not started | |
 | 4 | verification (`plan-verifier`) | not started | |
@@ -67,6 +67,7 @@ These were confirmed at `/cross-review` and are conditions on the tracks that ow
 | Stage 0 | Agent ceiling | 10 — the plan's declared envelope |
 | Stage 0 | Run `doc-writer` at the end | yes — T5 is a plan track |
 | Stage 0 | Untracked `docs/designs/` | committed, so worktree-isolated tracks can read the mockup T4's brief depends on |
+| Stage 1 | Track T5 (`doc-writer`) — keep it? | **cancelled as a separate track.** The honest count came to 11 agents against a ceiling of 10: 5 spent, plus T2b, three review lenses, `plan-verifier`, and `doc-writer`. S14 splits cleanly instead — the `server/README.md` API map goes to T2b, and the `INSIGHTS.md` appends were always the orchestrator's, since the skill requires that pass to run **once** (parallel tracks appending to one append-only file collide). The three review lenses were NOT cut: `architecture-reviewer` does not look for logic errors by design and `/code-review` is forbidden from reporting boundary crossings, so merging them is the standard way this pipeline lets a defect through |
 
 ## Open at the end
 

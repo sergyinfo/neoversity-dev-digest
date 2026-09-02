@@ -6,11 +6,14 @@
 "use client";
 
 import React from "react";
+import { useTranslations } from "next-intl";
 import { Icon, Badge } from "@devdigest/ui";
 import type { ReviewRecord, Verdict } from "@devdigest/shared";
 import { FindingsPanel } from "../FindingsPanel";
 import { VerdictBanner } from "../VerdictBanner";
 import { useDeleteReview } from "../../../../../../../lib/hooks/reviews";
+import { useCreateEvalCase } from "../../../../../../../lib/hooks/evals";
+import { useToast } from "../../../../../../../lib/toast";
 
 const VERDICT_COLOR: Record<string, string> = {
   request_changes: "var(--crit)",
@@ -51,7 +54,10 @@ export function ReviewRunAccordion({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetRunId, targetNonce, review.run_id]);
+  const t = useTranslations("prReview");
+  const toast = useToast();
   const del = useDeleteReview(prId);
+  const createEvalCase = useCreateEvalCase();
   const findings = review.findings;
   const blockers = findings.filter((f) => f.severity === "CRITICAL" && !f.dismissed_at).length;
   const verdictColor = review.verdict ? VERDICT_COLOR[review.verdict] ?? "var(--text-muted)" : "var(--text-muted)";
@@ -152,6 +158,15 @@ export function ReviewRunAccordion({
             prId={prId}
             repoFullName={repoFullName}
             headSha={headSha}
+            onEvalCase={(findingId) =>
+              createEvalCase.mutate(
+                // BQ-2a: the server prefers review.agent_id; this is the body
+                // fallback for a review with no agent attributed to it.
+                { findingId, agentId: review.agent_id },
+                { onSuccess: () => toast.success(t("finding.evalCaseCreated")) },
+              )
+            }
+            evalCasePending={createEvalCase.isPending}
           />
         </div>
       )}

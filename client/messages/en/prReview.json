@@ -9,7 +9,10 @@
     "replyToAuthor": "Reply to author",
     "replyPlaceholder": "Reply to the author about this finding…",
     "sendReply": "Send reply",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "evalCase": "Turn into eval case",
+    "evalCaseDisabledReason": "Accept or dismiss this finding first — an unlabelled finding is not a data point.",
+    "evalCaseCreated": "Added to the eval set"
   },
   "trifecta": {
     "lethal": "LETHAL TRIFECTA — ALL 3 PRESENT",

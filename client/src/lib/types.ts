@@ -39,6 +39,15 @@ export type {
   IntentSource,
   PrIntentRecord,
 } from "@devdigest/shared";
+export type {
+  EvalCase,
+  EvalRun,
+  EvalOwnerKind,
+  EvalRunRecord,
+  EvalRunResult,
+  EvalTrendPoint,
+  EvalDashboard,
+} from "@devdigest/shared";
 
 /** UI-only view model for a PR list row (derives display fields from PrMeta). */
 export interface PrRowView {
