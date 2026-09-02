@@ -277,7 +277,17 @@ d('L06 eval pipeline (Testcontainers pg)', () => {
     // AC-10 — scoring adds ZERO model calls: N cases, N calls, nothing else.
     expect(llm.calls.length - before).toBe(2);
 
-    const rows = await pg.handle.db.select().from(t.evalRuns);
+    // Scoped to THIS fixture's own agent, not `select().from(evalRuns)`:
+    // `eval_runs` has no workspace of its own, so tenancy is transitive through
+    // its case (`modules/evals/repository.ts`'s one rule), and since L06 S12 the
+    // seed itself writes two batches of run rows into the same database.
+    const rows = (
+      await pg.handle.db
+        .select({ run: t.evalRuns })
+        .from(t.evalRuns)
+        .innerJoin(t.evalCases, eq(t.evalRuns.caseId, t.evalCases.id))
+        .where(eq(t.evalCases.ownerId, agentId))
+    ).map((r) => r.run);
     expect(rows).toHaveLength(2);
     const batchIds = new Set(
       rows.map((r) => ActualOutput.parse(r.actualOutput).batch_id),
