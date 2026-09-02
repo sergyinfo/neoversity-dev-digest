@@ -71,9 +71,13 @@ function classify(files) {
   }
 
   // A real suite already proves the runner runs; the smoke row is only for a harness
-  // change that touched nothing else.
+  // change that touched nothing else — and only where that suite actually exists. Every
+  // other tier checks hasSuite() before emitting a row; this one did not, so on a branch
+  // without the smoke suite it scheduled a job that could not run by construction.
   if (harness && rows.size === 0) {
-    rows.set('harness', { kind: 'harness', name: 'smoke', runs: '1', ...HARNESS_SMOKE });
+    if (hasSuite(HARNESS_SMOKE.dir))
+      rows.set('harness', { kind: 'harness', name: 'smoke', runs: '1', ...HARNESS_SMOKE });
+    else skip('harness smoke', `no ${HARNESS_SMOKE.dir}/evals/evals.json to smoke-test with`);
   }
 
   return { rows: [...rows.values()], skipped };
