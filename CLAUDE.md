@@ -69,6 +69,11 @@ cd reviewer-core && npm run typecheck
 - **Writing or debugging e2e flows** → read `e2e/docs/flows.md`
 - **Hit unexpected behavior** → check `<package>/insights/gotchas.md`
 - **Changing DB schema** → read `server/docs/architecture.md` (Drizzle section)
-- **Changing a skill, an agent, or this file** → CI routes evals from the diff; run
-  `git diff --name-only --diff-filter=d main...HEAD | node skill-evals/ci/plan.mjs` to see
-  what will run and what will be skipped for want of a suite
+- **Changing a skill, an agent, or any CLAUDE.md** → CI runs only the eval suites your diff
+  touches. To see that decision before pushing (it takes the changed files from an environment
+  variable, not stdin):
+  ```bash
+  CHANGED_FILES="$(git diff --name-only --diff-filter=d main...HEAD)" node evals/scripts/ci-detect.mjs
+  ```
+  An artifact with no suite is named as skipped, not failed — which is the normal case, so read
+  the skip list rather than assuming coverage
