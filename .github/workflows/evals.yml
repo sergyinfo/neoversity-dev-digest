@@ -29,7 +29,10 @@ on:
   pull_request:
     paths:
       - '.claude/**'
-      - 'CLAUDE.md'
+      # Every package guide, not just the root one: an agent working in server/ or client/ reads
+      # that directory's CLAUDE.md, so a change there can move a verdict. Without this the
+      # workflow did not even start for server/CLAUDE.md.
+      - '**/CLAUDE.md'
       - 'evals/**'
       - '.github/workflows/evals.yml'
   workflow_dispatch:
@@ -75,7 +78,9 @@ jobs:
           else
             RANGE="$(git rev-list --max-parents=0 HEAD | tail -1)...HEAD"
           fi
-          CHANGED_FILES="$(git diff --name-only "$RANGE")"
+          # --diff-filter=d drops deletions: a removed agent or skill has nothing left to
+          # evaluate, and routing it prints a SKIP line for a file that no longer exists.
+          CHANGED_FILES="$(git diff --name-only --diff-filter=d "$RANGE")"
           export CHANGED_FILES
           node scripts/ci-detect.mjs
 
