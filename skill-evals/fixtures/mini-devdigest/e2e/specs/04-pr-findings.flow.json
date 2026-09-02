@@ -1,0 +1,10 @@
+{
+  "name": "pr findings",
+  "steps": [
+    { "goto": "/repos/acme-web/pulls/12" },
+    { "waitFor": "[data-testid=findings-list]" },
+    { "expectText": "3 findings" },
+    { "click": "[data-testid=finding-0]" },
+    { "expectText": "src/server.ts:41" }
+  ]
+}

@@ -1,0 +1,11 @@
+# reviewer-core (@devdigest/reviewer-core)
+
+## Iron rule
+No I/O — no DB, fs, GitHub, or persistence. Only the injected `LLMProvider`. The same code
+runs in the studio (server) and in CI. Keep it pure.
+
+## Conventions (not obvious from code)
+- The grounding gate (`src/grounding.ts`) is mandatory; **score is computed from findings
+  that SURVIVED grounding, not the model's self-report.** A self-reported score measures
+  the model's confidence, which is not the same thing and is not comparable between runs.
+- skills/memory/specs arrive as RESOLVED strings (slug→body is the caller's job).

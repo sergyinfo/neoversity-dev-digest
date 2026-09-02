@@ -1,8 +1,9 @@
 # A/B evals for the skills in .claude/skills.
 #
 # Unlike every other workflow in this repo, this one calls a model: each run is a
-# `claude -p` invocation, and the full matrix (3 cases x 2 arms x 3 runs) costs
-# roughly 0.9M tokens. That is why it is manual + weekly rather than per-PR.
+# `claude -p` invocation, and a full matrix costs roughly 0.9M tokens at five runs per
+# arm. That is why it is manual + weekly rather than per-PR, and why the default is two:
+# two screens whether a rule does anything, five is for trusting a small delta.
 #
 # The push trigger is the point of the whole thing: most skills here are vendored from
 # other people's GitHub repos and pinned by hash in skills-lock.json. When a hash moves,
@@ -19,17 +20,22 @@ on:
         type: string
         default: security
       tier:
-        description: Case tier — the gates are calibrated on data-flow
+        description: Case tier — leave empty to run every case in the suite
         type: string
-        default: data-flow
+        default: ''
       runs:
-        description: Runs per arm per case
+        description: Runs per arm per case — 2 screens a rule, raise to 5 to trust a small delta
         type: string
-        default: '3'
+        default: '2'
       model:
-        description: Model alias for the executor runs
+        description: Model for the executor runs — an alias, or an OpenRouter id when provider=openrouter
         type: string
         default: opus
+      provider:
+        description: anthropic (gates are calibrated here) or openrouter (cheap, thresholds not calibrated)
+        type: choice
+        options: [anthropic, openrouter]
+        default: anthropic
   schedule:
     # Mondays 03:00 UTC — after any weekend skill updates, before the week starts.
     - cron: '0 3 * * 1'
@@ -72,8 +78,22 @@ jobs:
       - name: Check auth
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          test -n "$ANTHROPIC_API_KEY" || { echo "::error::ANTHROPIC_API_KEY is not set"; exit 1; }
+          set -euo pipefail
+          if [ "${{ inputs.provider || 'anthropic' }}" = "openrouter" ]; then
+            test -n "${OPENROUTER_API_KEY:-}" || { echo "::error::OPENROUTER_API_KEY is not set"; exit 1; }
+            {
+              echo "ANTHROPIC_BASE_URL=https://openrouter.ai/api"
+              echo "ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY"
+              # Must be empty, not unset: the CLI prefers x-api-key over the bearer token.
+              echo "ANTHROPIC_API_KEY="
+            } >> "$GITHUB_ENV"
+            echo "::warning::running on openrouter — the gate thresholds were calibrated on Claude, so read the deltas, not the pass/fail"
+          else
+            test -n "${ANTHROPIC_API_KEY:-}" || { echo "::error::ANTHROPIC_API_KEY is not set"; exit 1; }
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$GITHUB_ENV"
+          fi
           claude --version
 
       - name: Run evals
@@ -81,10 +101,22 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
+          # --tier is omitted when empty. It used to default to data-flow, a tier that
+          # exists only in the security suite, so dispatching any other skill matched no
+          # cases and failed before the first run.
+          extra=()
+          tier="${{ inputs.tier }}"
+          # schedule and push carry no inputs. Fall back to the calibrated tier there
+          # rather than the whole suite: that trigger is a cost-bounded regression check
+          # (3 cases, not 6). A dispatch can still ask for everything by leaving it empty.
+          if [ -z "$tier" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            tier=data-flow
+          fi
+          [ -n "$tier" ] && extra+=(--tier "$tier")
           npx tsx run.ts \
             --skill "${{ inputs.skill || 'security' }}" \
-            --tier "${{ inputs.tier || 'data-flow' }}" \
-            --runs "${{ inputs.runs || '3' }}" \
+            "${extra[@]}" \
+            --runs "${{ inputs.runs || '2' }}" \
             --model "${{ inputs.model || 'opus' }}" \
             --concurrency 4 \
             --out "results/ci-${{ github.run_id }}"

@@ -36,3 +36,7 @@ skill-evals/results/
 # file whose parent directory is excluded.
 !.claude/skills/
 !.claude/skills/**
+
+# the mini-devdigest fixture is built out of per-package CLAUDE.md files — the
+# whole point of it — and the global ignore rule would erase them
+!skill-evals/fixtures/**

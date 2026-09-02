@@ -1,0 +1,43 @@
+{
+  "fixture": "mini-devdigest",
+  "note": "Answer key for the fixture. Point a suite's case at this directory and copy plants/decoys in. Written for the agent grader: plants are prose, not regex.",
+  "prompt": "We're about to merge this branch. Can you review it? It touches four packages and I want to know if anything in it is wrong before it lands.",
+  "plants": [
+    {
+      "id": "score-from-self-report",
+      "category": "convention",
+      "describe": "reviewer-core/src/review.ts sets score from response.confidence \u2014 the model's self-report \u2014 while reviewer-core/CLAUDE.md requires the score to be computed from findings that survived grounding, and score.ts already implements exactly that and is never called. The review must assert this is wrong, not merely describe the scoring."
+    },
+    {
+      "id": "io-in-pure-core",
+      "category": "convention",
+      "describe": "reviewer-core/src/review.ts calls readFileSync to load skill bodies. reviewer-core/CLAUDE.md states an iron rule of no I/O \u2014 only the injected LLMProvider \u2014 and separately that skills arrive already resolved, slug-to-body being the caller's job. The review must assert the filesystem read does not belong here."
+    },
+    {
+      "id": "throw-instead-of-omit",
+      "category": "convention",
+      "describe": "server/src/modules/conventions/service.ts throws when the repo is not indexed. server/CLAUDE.md states context enrichment is best-effort: on error or an unindexed repo, omit the section and do not throw. The review must assert the throw is the defect, not praise it as error handling."
+    },
+    {
+      "id": "bare-fetch-and-duplicated-type",
+      "category": "convention",
+      "describe": "client/src/components/PullList.tsx calls fetch directly and declares a local interface Pull. client/CLAUDE.md requires all API access through src/lib/api.ts and forbids hand-duplicating contract types from @devdigest/shared. Either half counts, both is the full finding."
+    },
+    {
+      "id": "llm-step-in-e2e-flow",
+      "category": "convention",
+      "describe": "e2e/specs/10-conventions.flow.json contains an llm step. e2e/CLAUDE.md states flows are deterministic and no LLM is called. The review must assert the step breaks determinism."
+    },
+    {
+      "id": "unvalidated-request-body",
+      "category": "control",
+      "describe": "server/src/modules/conventions/routes.ts casts request.body with `as` and validates nothing, so workspaceId, repoId and diff reach the service unchecked. This needs no package guide to spot \u2014 it is the CONTROL, and both arms are expected to report it. If the arms differ here, something other than the skill moved."
+    }
+  ],
+  "decoys": [
+    "client/src/components/AgentList.tsx using api from lib/api.ts and importing AgentContract from @devdigest/shared \u2014 that is the correct pattern, not a defect",
+    "e2e/specs/04-pr-findings.flow.json being fully deterministic with no model call \u2014 correct as written",
+    "the conventions service reaching repo-intel through container.repoIntel.summarize() \u2014 that is the sanctioned facade, not a violation",
+    "server/src/modules/index.ts registering the module statically with one line \u2014 that is the prescribed way to add a module"
+  ]
+}

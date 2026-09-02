@@ -27,7 +27,8 @@ type Arm = string;
 
 interface Plant {
   id: string;
-  pattern: string;
+  /** Required by the regex grader; the agent grader uses `describe` instead. */
+  pattern?: string;
   /** Optional grouping so recall can be reported per kind of violation. */
   category?: string;
   /**
@@ -145,8 +146,12 @@ function parseArgs(argv: string[]) {
   return {
     // A bare name resolves under .claude/skills; a path is used as given.
     skill: get('--skill', 'security')!,
-    tier: get('--tier', 'data-flow')!,
-    runs: Number(get('--runs', '3')),
+    // No default: 'data-flow' only exists in one suite, so hardcoding it made every
+    // command fail for the others, --print-prompt included. Absent --tier means all cases.
+    tier: get('--tier'),
+    // Two per arm by default. Enough to screen a rule — a real effect shows as 2/2 vs
+    // 0/2 — and not enough to trust a small delta, which is what --runs 5 is for.
+    runs: Number(get('--runs', '2')),
     cases: get('--cases')?.split(',').map((s) => s.trim()),
     model: get('--model', process.env.SKILL_EVALS_MODEL ?? 'opus')!,
     concurrency: Number(get('--concurrency', '4')),
@@ -362,7 +367,7 @@ function grade(c: Case, review: string, lowDisciplineApplies: boolean): Grade {
   const low = (sev.low ?? 0) + (sev.info ?? 0);
 
   const titles = rows.join('\n');
-  const hit = (p: Plant) => new RegExp(p.pattern, 'i').test(p.titleOnly ? titles : region);
+  const hit = (p: Plant) => Boolean(p.pattern) && new RegExp(p.pattern!, 'i').test(p.titleOnly ? titles : region);
   const found = c.plants.filter(hit).map((p) => p.id);
   const missed = c.plants.filter((p) => !found.includes(p.id)).map((p) => p.id);
 
@@ -406,6 +411,7 @@ async function patternsEchoingSkill(
   const out: { caseId: string; plant: string; pattern: string; excerpt: string }[] = [];
   for (const c of cases) {
     for (const p of c.plants) {
+      if (!p.pattern) continue;
       const m = new RegExp(p.pattern, 'i').exec(skillText);
       if (m) {
         const at = Math.max(0, m.index - 40);
@@ -532,11 +538,20 @@ Reply with ONLY this JSON, no prose around it:
  "lowOrInfoCount":0,
  "falseClaims":[{"claim":"...","why":"..."}]}`;
 
-  const { json } = await runClaude(prompt, model, ['Read', 'Glob', 'Grep', 'Bash']);
-  const text: string = json.result ?? '';
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error(`grader returned no JSON: ${text.slice(0, 200)}`);
-  const v = JSON.parse(m[0]);
+  // A dropped connection mid-grade costs a whole run, and the review is already written
+  // and paid for. One retry is far cheaper than re-running the executor.
+  let v: any;
+  for (let attempt = 1; ; attempt += 1) {
+    const { json } = await runClaude(prompt, model, ['Read', 'Glob', 'Grep', 'Bash']);
+    const text: string = json.result ?? '';
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) {
+      v = JSON.parse(m[0]);
+      break;
+    }
+    if (attempt >= 2) throw new Error(`grader returned no JSON: ${text.slice(0, 200)}`);
+    console.log(`  [retry] grader produced no JSON, retrying once`);
+  }
 
   const found: string[] = (v.plants ?? []).filter((p: any) => p.found).map((p: any) => p.id);
   return {
@@ -572,18 +587,26 @@ async function main() {
     : path.join(REPO_ROOT, '.claude/skills', args.skill);
   const suite: Suite = JSON.parse(await readFile(path.join(skillDir, 'evals/evals.json'), 'utf8'));
 
-  // --cases names them explicitly; otherwise the tier decides. The gates are
-  // calibrated on the data-flow tier, so that is the default.
+  // --cases names them explicitly, --tier narrows to one tier, and neither means every
+  // case in the suite. There is deliberately no default tier: the previous default named
+  // a tier that exists in one suite only, so every command failed for the others.
   const cases = args.cases
     ? suite.evals.filter((c) => args.cases!.includes(c.id))
-    : suite.evals.filter((c) => c.tier === args.tier);
+    : args.tier
+      ? suite.evals.filter((c) => c.tier === args.tier)
+      : suite.evals;
+
+  if (!args.cases && !args.tier) {
+    const tiers = [...new Set(cases.map((c) => c.tier))];
+    console.log(`tiers: ${tiers.join(', ')} — all cases (gates are calibrated per tier; pass --tier to narrow)`);
+  }
 
   const graderMode = args.grader ?? suite.grader ?? 'regex';
   const useAgentGrader = graderMode === 'agent';
   const lowApplies = suite.lowDisciplineApplies !== false;
 
   if (cases.length === 0)
-    throw new Error(`no cases matched ${args.cases ? `--cases=${args.cases.join(',')}` : `--tier=${args.tier}`}`);
+    throw new Error(`no cases matched ${args.cases ? `--cases=${args.cases.join(',')}` : `--tier=${args.tier}`}. Suite has: ${[...new Set(suite.evals.map((c) => c.tier))].join(', ')}`);
 
   if (args.gradeOnly) {
     const report = summarise(
@@ -841,22 +864,27 @@ function summarise(suite: Suite, results: RunResult[]) {
   if (g.withSkillRecall !== undefined && withSkill.recall < g.withSkillRecall)
     failures.push(`${arms.treatment} recall ${withSkill.recall.toFixed(2)} < ${g.withSkillRecall}`);
   if (g.withSkillLowDiscipline !== undefined && withSkill.lowDiscipline < g.withSkillLowDiscipline)
-    failures.push(`${arms.treatment} LOW discipline ${withSkill.lowDiscipline.toFixed(2)} < ${g.withSkillLowDiscipline}`);
+    failures.push(
+      `${arms.treatment} LOW discipline ${withSkill.lowDiscipline.toFixed(4)} < ${g.withSkillLowDiscipline}` +
+        ` (${Math.round(withSkill.lowDiscipline * withSkill.runs)}/${withSkill.runs} runs)`
+    );
 
   const delta = withSkill.passRate - without.passRate;
   if (g.minPassRateDelta !== undefined && delta < g.minPassRateDelta)
-    failures.push(`pass-rate delta ${delta.toFixed(2)} < ${g.minPassRateDelta} — the skill is not earning its keep`);
+    failures.push(
+      `pass-rate delta ${delta.toFixed(4)} < ${g.minPassRateDelta} — the skill is not earning its keep`
+    );
 
   for (const [cat, want] of Object.entries(g.newSkillCategoryRecall ?? {})) {
     const got = withSkill.categoryRecall[cat] ?? 0;
-    if (got < want) failures.push(`${arms.treatment} recall on '${cat}' plants ${got.toFixed(2)} < ${want}`);
+    if (got < want) failures.push(`${arms.treatment} recall on '${cat}' plants ${got.toFixed(4)} < ${want}`);
   }
   // The delta the experiment exists to measure: the new rules must find what the old
   // version could not.
   for (const [cat, want] of Object.entries(g.minCategoryRecallDelta ?? {})) {
     const d = (withSkill.categoryRecall[cat] ?? 0) - (without.categoryRecall[cat] ?? 0);
     if (d < want)
-      failures.push(`'${cat}' recall delta ${d.toFixed(2)} < ${want} — the new section is not earning its keep`);
+      failures.push(`'${cat}' recall delta ${d.toFixed(4)} < ${want} — the new section is not earning its keep`);
   }
   // And the control must stay a control: a category both versions cover should not move.
   for (const [cat, limit] of Object.entries(g.maxCategoryRecallDelta ?? {})) {

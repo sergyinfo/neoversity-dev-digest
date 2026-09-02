@@ -16,6 +16,19 @@ npm run eval:textbook             # the iteration-1 corpus
 npm run grade -- <results-dir>    # re-score existing reviews, no model calls
 ```
 
+## How many runs
+
+Default is **2 per arm**, and that is a screening number, not a measurement. With two runs
+a per-plant recall can only be 0, 0.5 or 1, so a clean result (2/2 against 0/2) is real and
+a split one (1/2) tells you nothing.
+
+- **2 runs** — does this rule do anything at all? Every delta that mattered in `history/`
+  was a clean separation and would have shown at two.
+- **5 runs** — only when a delta looks real, is small, and decides something. `--runs 5`.
+
+Raising the count is the most expensive knob here: runs scale linearly and each is a full
+review. Adding plants to an existing fixture is nearly free by comparison.
+
 Flags: `--skill <name|path>` (bare name resolves under `.claude/skills`), `--tier`,
 `--cases a,b`, `--runs`, `--model`, `--concurrency`, `--out`, `--grade-only <dir>`.
 
@@ -82,17 +95,52 @@ keyword. If a precision failure looks wrong, check the pattern before the review
 
 ## Cost
 
-The full matrix is 18 model runs — measured at ~0.9M tokens and about $15 on Opus. That is why the CI workflow is
-`workflow_dispatch` + weekly `schedule` and not a per-PR check — unlike every other
-workflow in this repo, which is deliberately keyless and deterministic. Its most
-valuable trigger is a push to `skills-lock.json` or `.claude/skills/**`: skills are
-vendored from other people's repos, and an upstream rewrite could remove the only
-effect this skill actually has.
+The full matrix is 18 model runs — measured at ~0.9M tokens and about $15 on Opus.
+Unlike every other workflow in this repo, these call a model, so the two CI entry points
+are priced differently on purpose.
+
+## On CI
+
+Two workflows, and the split between them is the point.
+
+**`evals-pr.yml` — screening, per PR.** `skill-evals/ci/plan.mjs` reads
+`git diff --name-only` and routes: a changed skill runs its own suite, a changed
+`CLAUDE.md` runs the repo-guide suite, a changed agent runs that agent's suite. One run
+per arm on `deepseek/deepseek-v4-pro` (~$0.72 for the whole security suite against ~$7 on
+Opus); the repo-guide check runs on `google/gemini-3.6-flash`. Model policy lives in the
+`env:` block at the top of the workflow.
+
+**Anything without a suite is skipped, named in the job summary, and is not a failure** —
+today that is 10 of 13 skills, all 8 agents, and the repo guides. Check the routing before
+pushing:
+
+```bash
+git diff --name-only --diff-filter=d main...HEAD | node skill-evals/ci/plan.mjs
+```
+
+A failed gate on a PR is a **warning**, not a blocked merge: one screening run per arm has
+too much variance to block on. What does fail the job is a missing `benchmark.json` —
+that means the harness never reached a verdict, which is a broken runner or a dead
+endpoint rather than a quality signal.
+
+**`skill-evals.yml` — the verdict.** Manual and weekly, on Claude, 2 runs per arm, hard
+gates. The thresholds in every suite were calibrated on Opus, so a cheap-model run tells
+you about deltas, not about pass/fail. Its most valuable trigger is a push to
+`skills-lock.json` or `.claude/skills/**`: skills are vendored from other people's repos,
+and an upstream rewrite could remove the only effect a skill actually has.
+
+Both accept `provider: openrouter`, which points the Claude Code CLI at OpenRouter's
+Anthropic-shaped endpoint (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, with
+`ANTHROPIC_API_KEY` explicitly empty — the CLI prefers `x-api-key` when both are set).
+Needs an `OPENROUTER_API_KEY` repository secret.
 
 ## Layout
 
 ```
 run.ts                runner, grader, gates — suite-agnostic
+ci/plan.mjs           changed files -> which suites CI runs, and what it skips
+suites/               suites for things that are not skills (repo guides, agents)
+fixtures/             shared fixtures not owned by one skill
 history/              analysis.md + benchmark.md per iteration, kept in git
 results/              run output — gitignored
 ```
