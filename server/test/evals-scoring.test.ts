@@ -297,3 +297,71 @@ describe('scoring.ts is pure (AC-10 / REC-4)', () => {
     for (const line of imports) expect(line.startsWith('import type ')).toBe(true);
   });
 });
+
+describe('matchFindings — the walk order (fix brief F4)', () => {
+  /**
+   * F4a. `classifyFindings` deliberately lets `must_find` win a finding that
+   * overlaps both kinds; `matchFindings` used to order only by
+   * `(file, start, end, index)`, so on identical lines the `must_not_flag`
+   * claimed the finding and `pass` came back false while precision scored the
+   * SAME finding `tp` and reported 1.0 — and swapping the two array positions
+   * flipped `pass`. Both orders are asserted because the bug WAS the asymmetry.
+   */
+  it('lets must_find claim a finding a must_not_flag covers identically, in either array order', () => {
+    const hit = finding({ id: 'f1', file: 'a.ts', start_line: 15, end_line: 15 });
+
+    for (const expectations of [
+      [mustNotFlag('a.ts', 10, 20), mustFind('a.ts', 10, 20)],
+      [mustFind('a.ts', 10, 20), mustNotFlag('a.ts', 10, 20)],
+    ]) {
+      const s = score({ expectations, findings: [hit], keptCount: 1, droppedCount: 0 });
+      const mustFindIndex = expectations.findIndex((e) => e.kind === 'must_find');
+      const mustNotFlagIndex = expectations.findIndex((e) => e.kind === 'must_not_flag');
+
+      expect(s.matches[mustFindIndex]!.finding_id).toBe('f1');
+      expect(s.matches[mustNotFlagIndex]!.finding_id).toBeNull();
+      // The two halves of the row now agree: precision calls it a true positive
+      // and `pass` does not contradict that.
+      expect(s.tp).toBe(1);
+      expect(s.fp).toBe(0);
+      expect(s.precision).toBe(1);
+      expect(s.pass).toBe(true);
+    }
+  });
+
+  /**
+   * F4b. The docstring claimed the result "depends only on the CONTENT of the
+   * inputs and not on the order they happen to arrive in". That was true for
+   * expectations and false for findings — the inner loop walked `findings` in
+   * array order, so two findings overlapping one expectation changed the stored
+   * `finding_id` when they were re-ordered.
+   */
+  it('does not depend on the order the FINDINGS arrive in', () => {
+    const low = finding({ id: 'low', file: 'a.ts', start_line: 11, end_line: 11 });
+    const high = finding({ id: 'high', file: 'a.ts', start_line: 19, end_line: 19 });
+    const expectations = [mustFind('a.ts', 10, 20)];
+
+    const forwards = score({ expectations, findings: [low, high], keptCount: 2, droppedCount: 0 });
+    const backwards = score({ expectations, findings: [high, low], keptCount: 2, droppedCount: 0 });
+
+    expect(forwards.matches).toEqual(backwards.matches);
+    expect(forwards.matches[0]!.finding_id).toBe('low');
+  });
+
+  /**
+   * F4b, second half: the tie-break is a BYTE comparison, not `localeCompare`.
+   * `'a'.localeCompare('B')` is -1 under ICU while `'B' < 'a'` is true by code
+   * unit, so these two ids disagree — which is exactly how a scorer sorted by
+   * collation returns a different answer on a machine with a different `LANG`.
+   */
+  it('breaks a same-range finding tie by BYTE order, so LANG cannot change the answer', () => {
+    const expectations = [mustFind('a.ts', 10, 20)];
+    const upper = finding({ id: 'B', file: 'a.ts', start_line: 11, end_line: 11 });
+    const lower = finding({ id: 'a', file: 'a.ts', start_line: 11, end_line: 11 });
+
+    for (const findings of [[upper, lower], [lower, upper]]) {
+      const s = score({ expectations, findings, keptCount: 2, droppedCount: 0 });
+      expect(s.matches[0]!.finding_id).toBe('B');
+    }
+  });
+});

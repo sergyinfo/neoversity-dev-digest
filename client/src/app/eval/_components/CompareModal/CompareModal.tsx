@@ -21,12 +21,23 @@ import type { EvalBatchSummary } from "@/lib/hooks/evals";
 import { s } from "./styles";
 
 /** Word-level diff (LCS), same shape as the design reference: a same/del/add
- * token stream, cheap enough for a single system prompt. */
+ * token stream. */
 type DiffToken = { text: string; kind: "same" | "del" | "add" };
 
-function diffWords(a: string, b: string): DiffToken[] {
-  const aw = a.split(/(\s+)/);
-  const bw = b.split(/(\s+)/);
+/**
+ * The most DP cells the LCS below may allocate — a `number[][]`, so roughly 8
+ * bytes a cell: 4M cells is ~32 MB and finishes in well under a second.
+ *
+ * This bound is not a nicety. A system prompt is free text and user-edited, so
+ * both inputs are unbounded, and the matrix used to be allocated unconditionally
+ * over whitespace-split tokens: two 8,000-word prompts are ~16,000 tokens each,
+ * i.e. a 256M-cell matrix — about 2 GB of JS numbers — which freezes or kills
+ * the tab the moment Compare is pressed, on the feature's headline screen.
+ */
+const MAX_DIFF_CELLS = 4_000_000;
+
+/** The LCS walk itself, over whatever units it is handed — words, or lines. */
+function lcsDiff(aw: readonly string[], bw: readonly string[]): DiffToken[] {
   const n = aw.length;
   const m = bw.length;
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -54,6 +65,39 @@ function diffWords(a: string, b: string): DiffToken[] {
   while (i < n) out.push({ text: aw[i++]!, kind: "del" });
   while (j < m) out.push({ text: bw[j++]!, kind: "add" });
   return out;
+}
+
+/**
+ * A word-level diff that DEGRADES instead of dying: words → lines → "replaced
+ * wholesale", picking the finest granularity that stays under `MAX_DIFF_CELLS`.
+ *
+ * Every step returns the same token-stream shape, so the renderer needs no
+ * branch of its own — only the size of the highlighted unit changes. That is
+ * the honest thing to give up on a 16,000-word prompt: nobody reads one of
+ * those word by word, and a coarse diff that renders beats a precise one that
+ * hangs the tab. Hirschberg's linear-space LCS would preserve word granularity
+ * at these sizes, but it is a lot of algorithm for a screen that is already
+ * unreadable at that length.
+ */
+function diffWords(a: string, b: string): DiffToken[] {
+  const aWords = a.split(/(\s+)/);
+  const bWords = b.split(/(\s+)/);
+  if (aWords.length * bWords.length <= MAX_DIFF_CELLS) return lcsDiff(aWords, bWords);
+
+  // Lines are far fewer units for the same text. Splitting on a CAPTURED `\n`
+  // keeps the newlines as tokens of their own, so the rendered text is still
+  // the input verbatim rather than a reflowed copy of it.
+  const aLines = a.split(/(\n)/);
+  const bLines = b.split(/(\n)/);
+  if (aLines.length * bLines.length <= MAX_DIFF_CELLS) return lcsDiff(aLines, bLines);
+
+  // Two prompts so large that even a line diff is quadratic — a single 4 MB
+  // line, say. There is no useful alignment to show at that size; "all of this
+  // went, all of that arrived" is at least true, and it is bounded.
+  return [
+    { text: a, kind: "del" },
+    { text: b, kind: "add" },
+  ];
 }
 
 function fmtPct(v: number): string {

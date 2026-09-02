@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Review } from '@devdigest/shared';
 import { MockLLMProvider } from '../src/adapters/mocks.js';
 import { ActualOutput } from '../src/modules/evals/contract.js';
-import type { InsertEvalRun } from '../src/modules/evals/repository.js';
+import type {
+  BatchAggregateRow,
+  InsertEvalRun,
+  RunWithCaseRow,
+} from '../src/modules/evals/repository.js';
 
 /**
  * L06 S4 — the run loop's invariants, with no database and one mock model.
@@ -27,7 +31,13 @@ vi.mock('@devdigest/reviewer-core', async (importOriginal) => {
   };
 });
 
-const { EvalsService, MAX_CASES_PER_RUN } = await import('../src/modules/evals/service.js');
+const {
+  EvalsService,
+  MAX_CASES_PER_RUN,
+  AGENT_RECENT_RUNS_LIMIT,
+  RECENT_RUNS_LIMIT,
+  PRECISION_UNDEFINED_ALERT,
+} = await import('../src/modules/evals/service.js');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -348,5 +358,250 @@ describe('runSet — failure modes', () => {
     expect(inserted).toHaveLength(1);
     expect(llm.calls).toHaveLength(1);
     expect(results[0]!.result.traces_total).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dashboards — fix brief F2 (recent-runs truncation) and F3 (per-agent REC-2)
+// ---------------------------------------------------------------------------
+
+const RAN_AT = new Date('2026-09-03T10:00:00.000Z');
+
+/**
+ * One run row as the repository returns it, carrying a real `actual_output`
+ * envelope: `precisionUndefinedByBatch` re-parses these, so a hand-waved shape
+ * would make every batch look unreadable and pass the test for the wrong reason.
+ */
+function runRow(over: {
+  caseId: string;
+  caseName: string;
+  batchId: string;
+  ownerId?: string;
+  /** A finding on a labelled line — what makes TP + FP > 0. */
+  landsOnLabelledLine: boolean;
+}): RunWithCaseRow {
+  const hit = {
+    id: `f-${over.caseId}`,
+    severity: 'CRITICAL' as const,
+    category: 'security' as const,
+    title: 'Hardcoded token',
+    file: 'src/config.ts',
+    // 11 overlaps the expectation below; 900 lands nowhere labelled.
+    start_line: over.landsOnLabelledLine ? 11 : 900,
+    end_line: over.landsOnLabelledLine ? 11 : 900,
+    explanation: 'no',
+    confidence: 0.9,
+  };
+  return {
+    run: {
+      id: `run-${over.caseId}`,
+      caseId: over.caseId,
+      ranAt: RAN_AT,
+      actualOutput: {
+        batch_id: over.batchId,
+        findings: [hit],
+        grounded_ids: [hit.id],
+        matches: [],
+        agent: { id: 'agent-1', name: 'Security Reviewer', system_prompt: 'p', model: 'm', skills: [] },
+      },
+      pass: true,
+      recall: 1,
+      precision: 1,
+      citationAccuracy: 1,
+      durationMs: 10,
+      costUsd: 0.001,
+    },
+    caseName: over.caseName,
+    ownerId: over.ownerId ?? 'agent-1',
+    agentName: 'Security Reviewer',
+    expectedOutput: { expectations: [MUST_FIND] },
+  };
+}
+
+function batchRow(over: Partial<BatchAggregateRow> & { batchId: string }): BatchAggregateRow {
+  return {
+    ownerId: 'agent-1',
+    ranAt: RAN_AT,
+    recall: 1,
+    // 1 by the TP + FP = 0 rule whenever nothing landed on a labelled line —
+    // which is exactly the number F3 says must not be rendered as "100%".
+    precision: 1,
+    citationAccuracy: 1,
+    tracesPassed: 1,
+    tracesTotal: 1,
+    costUsd: 0.001,
+    agent: null,
+    ...over,
+  };
+}
+
+/**
+ * A service wired to an in-memory repository double. `recentRuns` APPLIES the
+ * limit it is given, so F2's truncation is reproduced rather than assumed away.
+ */
+function buildDashboard(opts: {
+  cases: { id: string; name: string }[];
+  runs: RunWithCaseRow[];
+  batches: BatchAggregateRow[];
+  agents?: { id: string; name: string }[];
+}) {
+  const service = new EvalsService({
+    db: {} as never,
+    agentsRepo: { getById: async () => ({ id: 'agent-1', name: 'Security Reviewer' }) },
+  } as never);
+
+  const calls: { recentRuns: { limit: number }[] } = { recentRuns: [] };
+  const repo = {
+    listCases: async () =>
+      opts.cases.map((c) => ({
+        id: c.id,
+        workspaceId: 'ws-1',
+        ownerKind: 'agent' as const,
+        ownerId: 'agent-1',
+        name: c.name,
+        inputDiff: DIFF,
+        inputFiles: [],
+        inputMeta: {},
+        expectedOutput: { expectations: [MUST_FIND] },
+        notes: null,
+      })),
+    countCases: async () => opts.cases.length,
+    countCasesByAgent: async () => [{ ownerId: 'agent-1', n: opts.cases.length }],
+    agentsWithCases: async () => opts.agents ?? [{ id: 'agent-1', name: 'Security Reviewer' }],
+    listBatches: async () => opts.batches,
+    recentRuns: async (_ws: string, o: { limit: number }) => {
+      calls.recentRuns.push({ limit: o.limit });
+      // The real query is `order by ran_at desc, id desc limit N`. Every row of
+      // one batch shares a `ran_at`, so the limit cuts INSIDE the newest batch.
+      return opts.runs.slice(0, o.limit);
+    },
+    runsForBatches: async (_ws: string, ids: readonly string[]) =>
+      opts.runs.filter((r) =>
+        ids.includes((r.run.actualOutput as { batch_id: string }).batch_id),
+      ),
+  };
+  (service as unknown as { repo: Record<string, unknown> }).repo = repo;
+  return { service, calls };
+}
+
+describe('dashboardForAgent — every case that ran shows a result (AC-16, fix brief F2)', () => {
+  it('returns the WHOLE newest batch even when it is larger than RECENT_RUNS_LIMIT', async () => {
+    // The reported failure: 30 cases, run once. 30 rows written, 25 returned,
+    // five cases rendering "Never run" immediately after passing.
+    const n = RECENT_RUNS_LIMIT + 5;
+    expect(n).toBeLessThanOrEqual(MAX_CASES_PER_RUN);
+    const cases = Array.from({ length: n }, (_, i) => ({ id: `c${i}`, name: `case ${i}` }));
+    const runs = cases.map((c) =>
+      runRow({ caseId: c.id, caseName: c.name, batchId: 'b-1', landsOnLabelledLine: true }),
+    );
+
+    const { service, calls } = buildDashboard({
+      cases,
+      runs,
+      batches: [batchRow({ batchId: 'b-1' })],
+    });
+    const dash = await service.dashboardForAgent('ws-1', 'agent-1');
+
+    expect(calls.recentRuns[0]!.limit).toBe(AGENT_RECENT_RUNS_LIMIT);
+    expect(dash.recent_runs).toHaveLength(n);
+    // The thing `EvalsTab` actually derives: a last result for EVERY case.
+    const covered = new Set(dash.recent_runs.map((r) => r.case_id));
+    for (const c of cases) expect(covered.has(c.id)).toBe(true);
+  });
+
+  it('sizes the agent feed by MAX_CASES_PER_RUN, so a full batch always fits', () => {
+    // A run is capped at MAX_CASES_PER_RUN cases, so this is the tight bound;
+    // raising the cap without raising this reintroduces the truncation.
+    expect(AGENT_RECENT_RUNS_LIMIT).toBeGreaterThanOrEqual(MAX_CASES_PER_RUN);
+  });
+});
+
+describe('per-agent precision_undefined (REC-2, fix brief F3)', () => {
+  const cases = [{ id: 'c1', name: 'one' }];
+
+  it('flags an agent whose latest batch produced nothing on a labelled line', async () => {
+    const { service } = buildDashboard({
+      cases,
+      runs: [runRow({ caseId: 'c1', caseName: 'one', batchId: 'b-1', landsOnLabelledLine: false })],
+      batches: [batchRow({ batchId: 'b-1' })],
+    });
+
+    const dash = await service.dashboardForWorkspace('ws-1');
+
+    // precision is 1 — and it means nothing. The row must say so.
+    expect(dash.agents[0]!.current.precision).toBe(1);
+    expect(dash.agents[0]!.precision_undefined).toBe(true);
+    expect(dash.alert).toBe(PRECISION_UNDEFINED_ALERT);
+  });
+
+  it('does NOT flag an agent whose latest batch landed on a labelled line', async () => {
+    const { service } = buildDashboard({
+      cases,
+      runs: [runRow({ caseId: 'c1', caseName: 'one', batchId: 'b-1', landsOnLabelledLine: true })],
+      batches: [batchRow({ batchId: 'b-1' })],
+    });
+
+    const dash = await service.dashboardForWorkspace('ws-1');
+    expect(dash.agents[0]!.precision_undefined).toBe(false);
+    expect(dash.alert).toBeNull();
+  });
+
+  it('reads the agent’s OWN newest batch, not the newest batch across all agents', async () => {
+    // `alert` is derived from batches[0] — agent-2's batch here. If the per-agent
+    // flag were the same value, agent-1's row would inherit a verdict about
+    // somebody else's run, which is precisely why REC-2 needed a per-agent field.
+    const runs = [
+      runRow({ caseId: 'c2', caseName: 'two', batchId: 'b-newest', ownerId: 'agent-2', landsOnLabelledLine: false }),
+      runRow({ caseId: 'c1', caseName: 'one', batchId: 'b-older', ownerId: 'agent-1', landsOnLabelledLine: true }),
+    ];
+    const { service } = buildDashboard({
+      cases,
+      runs,
+      // Newest first, as the repository returns them.
+      batches: [
+        batchRow({ batchId: 'b-newest', ownerId: 'agent-2', ranAt: new Date('2026-09-04T10:00:00.000Z') }),
+        batchRow({ batchId: 'b-older', ownerId: 'agent-1' }),
+      ],
+      agents: [
+        { id: 'agent-1', name: 'Security Reviewer' },
+        { id: 'agent-2', name: 'Style Reviewer' },
+      ],
+    });
+
+    const dash = await service.dashboardForWorkspace('ws-1');
+    const byId = new Map(dash.agents.map((a) => [a.agent_id, a]));
+
+    expect(dash.alert).toBe(PRECISION_UNDEFINED_ALERT); // about agent-2's batch
+    expect(byId.get('agent-2')!.precision_undefined).toBe(true);
+    expect(byId.get('agent-1')!.precision_undefined).toBe(false);
+  });
+
+  it('gives every batch in the history its own flag, not the newest one’s', async () => {
+    const runs = [
+      runRow({ caseId: 'c1', caseName: 'one', batchId: 'b-new', landsOnLabelledLine: false }),
+      runRow({ caseId: 'c1', caseName: 'one', batchId: 'b-old', landsOnLabelledLine: true }),
+    ];
+    const { service } = buildDashboard({
+      cases,
+      runs,
+      batches: [
+        batchRow({ batchId: 'b-new', ranAt: new Date('2026-09-04T10:00:00.000Z') }),
+        batchRow({ batchId: 'b-old' }),
+      ],
+    });
+
+    const batches = await service.listBatches('ws-1', 'agent-1');
+    expect(batches.map((b) => [b.batch_id, b.precision_undefined])).toEqual([
+      ['b-new', true],
+      ['b-old', false],
+    ]);
+  });
+
+  it('an agent that has never run is flagged rather than credited with 100%', async () => {
+    const { service } = buildDashboard({ cases, runs: [], batches: [] });
+    const dash = await service.dashboardForWorkspace('ws-1');
+    expect(dash.agents[0]!.last_ran_at).toBeNull();
+    expect(dash.agents[0]!.precision_undefined).toBe(true);
+    expect(dash.alert).toBeNull(); // no batch at all is not an alert
   });
 });

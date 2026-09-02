@@ -15,14 +15,16 @@
 # What it asserts, and why each one is here:
 #
 #   1. The two vendored contract copies are byte-identical, and neither they nor
-#      server/src/db/migrations were touched. L06 shipped its tables in
-#      0000_init.sql and its envelope module-locally, so a diff in either place
-#      means someone re-opened a settled decision.
+#      server/src/db/migrations were touched BY THIS BRANCH (diffed against the
+#      merge base, not against the working tree — see the check itself). L06
+#      shipped its tables in 0000_init.sql and its envelope module-locally, so a
+#      diff in either place means someone re-opened a settled decision.
 #   2. `eval_cases` and `eval_runs` really are in 0000_init.sql (the spec's
 #      "the two tables exist" condition) — no migration was needed, and none
 #      may appear.
 #   3. REC-4, the "no model in scoring" invariant, statically: the scorer and
-#      the repository never reach an LLM, and nothing under modules/evals/ calls
+#      the repository never reach an LLM, service.ts never INVOKES the provider
+#      it legitimately holds, and nothing under modules/evals/ calls
 #      `assemblePrompt` directly (which is what keeps the stored, attacker-
 #      controlled `input_diff` behind `wrapUntrusted`).
 #   4. Typecheck and test every package.
@@ -144,10 +146,36 @@ echo "L06 — protected zones"
 # that they have not drifted (server/INSIGHTS.md, 2026-08-17).
 empty "vendored shared copies are identical" \
   diff -rq server/src/vendor/shared client/src/vendor/shared
+
 # L06 adds no contract and no migration: both eval tables already ship in
 # 0000_init.sql and the HTTP envelope is module-local.
-empty "no contract edit, no migration" \
-  git status --porcelain server/src/vendor/shared client/src/vendor/shared server/src/db/migrations
+#
+# The invariant is about what the BRANCH DID, so it is checked against the merge
+# base — not with `git status --porcelain`, which reports only the working tree.
+# On any committed branch (i.e. every branch a reviewer or CI checks out) the
+# tree is clean, so the porcelain form printed nothing and passed regardless of
+# what the branch had committed into the protected zones: a green result that
+# cost nothing. The working tree is still checked as well, so an edit is caught
+# before it is committed too, but the branch diff is the invariant.
+PROTECTED=(server/src/vendor/shared client/src/vendor/shared server/src/db/migrations)
+
+protected_zones_untouched() {
+  local base=""
+  local ref
+  for ref in main origin/main; do
+    if base="$(git merge-base "$ref" HEAD 2>/dev/null)"; then break; fi
+    base=""
+  done
+  if [[ -z "$base" ]]; then
+    # Loud, not silent: without a base there is no branch-level check at all,
+    # and a check that cannot run must not report "ok".
+    echo "cannot resolve 'main' or 'origin/main' — the branch-level protected-zone check DID NOT RUN"
+    return 1
+  fi
+  git diff --name-only "$base" HEAD -- "${PROTECTED[@]}"
+  git status --porcelain -- "${PROTECTED[@]}"
+}
+empty "no contract edit, no migration (branch vs main)" protected_zones_untouched
 
 echo "L06 — schema"
 eval_tables_present() {
@@ -163,14 +191,28 @@ echo "L06 — no model in scoring (REC-4)"
 no_llm_in() { # no_llm_in <file>
   code_only "$1" | grep -nE 'container\.llm|\.complete\(|completeStructured' | sed "s|^|$1:|"
 }
+# service.ts is the ONE file in the module that legitimately holds a provider:
+# it calls `container.llm(...)` to obtain the LLMProvider it hands to
+# `reviewPullRequest`. So `no_llm_in` cannot be applied to it — which is why it
+# was not, and why appending a direct `completeStructured` call to service.ts
+# left every check in this script green while the module's own docstring
+# (service.ts, "Nothing in this module assembles a prompt by hand") claimed
+# otherwise. What is forbidden here is INVOKING the provider directly; obtaining
+# it is not.
+no_direct_model_call() { # no_direct_model_call <file>
+  code_only "$1" | grep -nE '\.complete\(|completeStructured' | sed "s|^|$1:|"
+}
+# Recursive, not `evals/*.ts`: a glob only ever sees today's flat file list, so
+# a future subdirectory would be exempt from the check by accident.
 no_assemble_prompt() {
   local f
-  for f in server/src/modules/evals/*.ts; do
+  while IFS= read -r f; do
     code_only "$f" | grep -n 'assemblePrompt' | sed "s|^|$f:|"
-  done
+  done < <(find server/src/modules/evals -name '*.ts' -type f | sort)
 }
 empty "scoring.ts reaches no LLM"           no_llm_in server/src/modules/evals/scoring.ts
 empty "repository.ts reaches no LLM"        no_llm_in server/src/modules/evals/repository.ts
+empty "service.ts invokes no model directly" no_direct_model_call server/src/modules/evals/service.ts
 # The stored input_diff is attacker-controlled content replayed on every future
 # run; it may reach a model only via reviewPullRequest, whose assemblePrompt
 # wraps it in wrapUntrusted() unconditionally. A hand-rolled prompt would skip that.

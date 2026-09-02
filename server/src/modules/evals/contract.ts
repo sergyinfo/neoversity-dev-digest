@@ -270,5 +270,18 @@ export const EvalBatchSummary = z.object({
   /** Null when no row in the batch recorded a cost, matching `EvalRunRecord`. */
   cost_usd: z.number().nullable(),
   agent: EvalAgentSnapshot.nullable(),
+  /**
+   * REC-2, per BATCH: nothing this batch produced landed on a labelled line, so
+   * `precision` above is 1 by the `TP + FP = 0` rule rather than by merit and a
+   * reader must be shown "n/a", not a flattering 100%.
+   *
+   * It cannot be inferred from `precision === 1` (that is the whole point — a
+   * genuinely perfect batch reports the same number), and it cannot be read off
+   * the workspace-level `alert`, which is derived from the newest batch across
+   * ALL agents and so cannot annotate one agent's row or one older batch. The
+   * server re-derives it with the scorer's own `classifyFindings` over the
+   * batch's stored envelopes.
+   */
+  precision_undefined: z.boolean(),
 });
 export type EvalBatchSummary = z.infer<typeof EvalBatchSummary>;

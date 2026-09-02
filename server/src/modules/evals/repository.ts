@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 import type { FindingRow, PullRow } from '../../db/rows.js';
@@ -235,6 +235,25 @@ export class EvalsRepository {
 
   /** Every row of one batch — workspace-guarded through its case. */
   async runsForBatch(workspaceId: string, batchId: string): Promise<RunWithCaseRow[]> {
+    return this.runsForBatches(workspaceId, [batchId]);
+  }
+
+  /**
+   * Every row of SEVERAL batches, in ONE query — workspace-guarded through the
+   * case, exactly as `runsForBatch` is.
+   *
+   * Exists because REC-2's "did anything land on a labelled line?" question is
+   * asked per batch (the batch-history table) and per agent (the overview row),
+   * and it can only be answered by re-labelling the stored envelopes against
+   * their case's `expected_output` — there is no column for it. Asking it one
+   * batch at a time would be a query per row of the table. The caller groups the
+   * result by `actual_output->>'batch_id'`, which is already in the envelope.
+   *
+   * An empty `batchIds` returns `[]` WITHOUT touching the database: `inArray`
+   * with an empty list is a degenerate SQL predicate, and no caller means it.
+   */
+  async runsForBatches(workspaceId: string, batchIds: readonly string[]): Promise<RunWithCaseRow[]> {
+    if (batchIds.length === 0) return [];
     const rows = await this.db
       .select({
         run: t.evalRuns,
@@ -246,7 +265,7 @@ export class EvalsRepository {
       .from(t.evalRuns)
       .innerJoin(t.evalCases, eq(t.evalRuns.caseId, t.evalCases.id))
       .leftJoin(t.agents, eq(t.agents.id, t.evalCases.ownerId))
-      .where(and(eq(t.evalCases.workspaceId, workspaceId), sql`${BATCH_ID} = ${batchId}`))
+      .where(and(eq(t.evalCases.workspaceId, workspaceId), inArray(BATCH_ID, [...batchIds])))
       .orderBy(asc(t.evalCases.name));
     return rows;
   }

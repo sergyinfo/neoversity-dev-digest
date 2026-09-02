@@ -78,6 +78,7 @@ function batch(over: Partial<EvalBatchSummary> = {}): EvalBatchSummary {
       model: AGENT.model,
       skills: [],
     },
+    precision_undefined: false,
     ...over,
   };
 }
@@ -117,6 +118,7 @@ beforeEach(() => {
           current: { recall: 0.8, precision: 0.9, citation_accuracy: 1, traces_passed: 8, traces_total: 10, cost_usd: 0.1 },
           delta: { recall: 0.1, precision: -0.05, citation_accuracy: 0 },
           last_ran_at: "2026-08-29T10:00:00.000Z",
+          precision_undefined: false,
         },
       ],
     },
@@ -136,7 +138,7 @@ describe("EvalDashboardView — overview empty state", () => {
         trend: [],
         recent_runs: [],
         alert: null,
-        agents: [{ agent_id: AGENT.id, agent_name: AGENT.name, cases_total: 0, current: { recall: 0, precision: 0, citation_accuracy: 0, traces_passed: 0, traces_total: 0, cost_usd: null }, delta: { recall: 0, precision: 0, citation_accuracy: 0 }, last_ran_at: null }],
+        agents: [{ agent_id: AGENT.id, agent_name: AGENT.name, cases_total: 0, current: { recall: 0, precision: 0, citation_accuracy: 0, traces_passed: 0, traces_total: 0, cost_usd: null }, delta: { recall: 0, precision: 0, citation_accuracy: 0 }, last_ran_at: null, precision_undefined: true }],
       },
       isLoading: false,
     });
@@ -201,5 +203,87 @@ describe("EvalDashboardView — Compare selection (S11, AC-18/AC-19)", () => {
     fireEvent.click(screen.getAllByRole("checkbox")[1]!);
     fireEvent.click(screen.getByRole("button", { name: "Compare" }));
     expect(screen.getByTestId("compare-modal")).toBeInTheDocument();
+  });
+});
+
+describe("EvalDashboardView — REC-2, a vacuous precision is never 100% (fix brief F3)", () => {
+  /** The workspace dashboard, with one agent whose flag the test controls. */
+  function workspaceWith(precisionUndefined: boolean) {
+    const current = {
+      recall: 0.8,
+      // 1 by the scorer's `TP + FP = 0` rule — indistinguishable from a real
+      // perfect score without the flag beside it. This is the whole finding.
+      precision: 1,
+      // Not 1: it would render its own "100%" and blunt the assertions below,
+      // which are about precision and nothing else.
+      citation_accuracy: 0.95,
+      traces_passed: 8,
+      traces_total: 10,
+      cost_usd: 0.1,
+    };
+    useWorkspaceEvalDashboard.mockReturnValue({
+      data: {
+        owner_kind: null,
+        owner_id: null,
+        cases_total: 8,
+        current,
+        delta: { recall: 0, precision: 0, citation_accuracy: 0 },
+        trend: [],
+        recent_runs: [],
+        // Deliberately null: `alert` describes the newest batch across ALL
+        // agents, so the per-agent row may not lean on it.
+        alert: null,
+        agents: [
+          {
+            agent_id: AGENT.id,
+            agent_name: AGENT.name,
+            cases_total: 8,
+            current,
+            delta: { recall: 0, precision: 0, citation_accuracy: 0 },
+            last_ran_at: "2026-08-29T10:00:00.000Z",
+            precision_undefined: precisionUndefined,
+          },
+        ],
+      },
+      isLoading: false,
+    });
+  }
+
+  it("renders n/a, not 100%, in the overview row for an agent with no labelled findings", () => {
+    workspaceWith(true);
+    renderView();
+
+    expect(screen.getByText("n/a")).toBeInTheDocument();
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
+    // Recall is unaffected — only precision is the vacuous one.
+    expect(screen.getByText("80%")).toBeInTheDocument();
+  });
+
+  it("still renders a real 100% when the agent did land on labelled lines", () => {
+    workspaceWith(false);
+    renderView();
+
+    expect(screen.getAllByText("100%")).toHaveLength(1);
+    expect(screen.queryByText("n/a")).not.toBeInTheDocument();
+  });
+
+  it("renders n/a per ROW in the batch history, so an old batch keeps its own verdict", () => {
+    useEvalBatches.mockReturnValue({
+      data: [
+        // `citation_accuracy` is off 1 on purpose: it renders in the same table
+        // and a 100% there would be indistinguishable from the precision cell.
+        batch({ batch_id: "b-new", precision: 1, citation_accuracy: 0.9, precision_undefined: true }),
+        batch({ batch_id: "b-old", precision: 1, citation_accuracy: 0.9, precision_undefined: false }),
+      ],
+      isLoading: false,
+    });
+    renderView();
+    fireEvent.click(screen.getByText("Security Reviewer"));
+
+    // One row measured nothing and one measured a perfect score. Before the fix
+    // both printed "100%"; the workspace `alert` could not tell them apart
+    // because it is derived from the newest batch only.
+    expect(screen.getAllByText("n/a")).toHaveLength(1);
+    expect(screen.getAllByText("100%")).toHaveLength(1);
   });
 });

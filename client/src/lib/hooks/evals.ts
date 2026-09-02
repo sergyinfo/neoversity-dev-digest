@@ -74,6 +74,15 @@ export interface EvalBatchSummary {
   traces_total: number;
   cost_usd: number | null;
   agent: EvalAgentSnapshot | null;
+  /**
+   * REC-2 for THIS batch: nothing it produced landed on a labelled line, so
+   * `precision` above is 1 by the `TP + FP = 0` rule rather than by merit and
+   * the row must read "n/a". It cannot be inferred from `precision === 1` — a
+   * genuinely perfect batch reports the same number — and the dashboard's
+   * workspace-level `alert` describes only the NEWEST batch, so it cannot
+   * annotate an older row in the batch-history table.
+   */
+  precision_undefined: boolean;
 }
 
 /**
@@ -93,6 +102,13 @@ export interface AgentEvalSummary {
   current: EvalDashboard["current"];
   delta: EvalDashboard["delta"];
   last_ran_at: string | null;
+  /**
+   * REC-2 for this agent's OWN newest batch. The dashboard-level `alert` is
+   * derived from the newest batch across ALL agents, so it cannot correctly
+   * annotate a per-agent row — an agent that has demonstrated nothing would
+   * otherwise print a flattering 100% beside one that earned it.
+   */
+  precision_undefined: boolean;
 }
 
 /**

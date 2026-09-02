@@ -61,8 +61,31 @@ import { classifyFindings, score } from './scoring.js';
  */
 export const MAX_CASES_PER_RUN = 50;
 
-/** How many run rows the dashboards return under `recent_runs`. */
+/**
+ * How many run rows the WORKSPACE dashboard returns under `recent_runs`.
+ *
+ * A feed, read as a feed: the `/eval` overview table shows the newest runs
+ * across every agent and nothing derives a per-case fact from it.
+ */
 export const RECENT_RUNS_LIMIT = 25;
+
+/**
+ * How many run rows the AGENT dashboard returns under `recent_runs` — at least
+ * `MAX_CASES_PER_RUN`, and that floor is load-bearing rather than generous.
+ *
+ * `EvalsTab` derives each case's LAST RESULT from this feed (AC-16, "list every
+ * case with its last result"), because `EvalCase` carries no such field. Every
+ * row of one batch shares an identical `ran_at`, so `orderBy(desc(ranAt),
+ * desc(id))` truncates *within* the newest batch once the limit drops below the
+ * batch size: an agent with 30 cases run once wrote 30 rows, got 25 back, and
+ * rendered five cases that had just passed as "Never run".
+ *
+ * A run is capped at `MAX_CASES_PER_RUN` cases, so a batch is never larger than
+ * that — this limit therefore always returns the whole newest batch. If
+ * `MAX_CASES_PER_RUN` ever rises, this must rise with it; the `Math.max` says so
+ * mechanically rather than in prose.
+ */
+export const AGENT_RECENT_RUNS_LIMIT = Math.max(RECENT_RUNS_LIMIT, MAX_CASES_PER_RUN);
 
 /** Longest generated case name; `eval_cases.name` is `text`, this is for the UI. */
 const MAX_CASE_NAME = 160;
@@ -101,6 +124,16 @@ export interface AgentEvalSummary {
   current: EvalDashboard['current'];
   delta: EvalDashboard['delta'];
   last_ran_at: string | null;
+  /**
+   * REC-2 for THIS agent's newest batch: `current.precision` is 1 by the
+   * `TP + FP = 0` rule rather than by merit, so the row must read "n/a".
+   *
+   * Additive, like the rest of this shape. It cannot be replaced by the
+   * dashboard's workspace-level `alert`, which is derived from the newest batch
+   * across ALL agents — an agent that has demonstrated nothing would otherwise
+   * print 100% next to an agent that earned it.
+   */
+  precision_undefined: boolean;
 }
 
 /**
@@ -438,11 +471,23 @@ export class EvalsService {
   // Reading: batches + dashboards
   // =========================================================================
 
-  /** The batch list (BQ-4a) — what Compare selects two of. */
+  /**
+   * The batch list (BQ-4a) — what Compare selects two of, and what the
+   * drill-down's batch-history table renders a row per.
+   *
+   * Every batch carries its OWN `precision_undefined` (REC-2). The table prints
+   * a precision per row, and the workspace-level `alert` cannot annotate those:
+   * it describes the newest batch across all agents, so reusing it here would
+   * label an old batch with a newer one's verdict.
+   */
   async listBatches(workspaceId: string, agentId: string): Promise<EvalBatchSummary[]> {
     await this.requireAgent(workspaceId, agentId);
     const rows = await this.repo.listBatches(workspaceId, agentId);
-    return rows.map(toBatchSummary);
+    const flags = await this.precisionUndefinedByBatch(
+      workspaceId,
+      rows.map((r) => r.batchId),
+    );
+    return rows.map((r) => toBatchSummary(r, flags.get(r.batchId) ?? true));
   }
 
   async dashboardForAgent(workspaceId: string, agentId: string): Promise<EvalDashboard> {
@@ -450,16 +495,22 @@ export class EvalsService {
     const [cases, batchRows, recent] = await Promise.all([
       this.repo.listCases(workspaceId, agentId),
       this.repo.listBatches(workspaceId, agentId),
-      this.repo.recentRuns(workspaceId, { agentId, limit: RECENT_RUNS_LIMIT }),
+      this.repo.recentRuns(workspaceId, { agentId, limit: AGENT_RECENT_RUNS_LIMIT }),
     ]);
-    const batches = batchRows.map(toBatchSummary);
+    // Only the newest batch's flag is read here (it is what `alert` describes and
+    // what the metric cards show), so only that one is re-derived.
+    const flags = await this.precisionUndefinedByBatch(
+      workspaceId,
+      batchRows[0] ? [batchRows[0].batchId] : [],
+    );
+    const batches = batchRows.map((r) => toBatchSummary(r, flags.get(r.batchId) ?? true));
     return {
       owner_kind: 'agent',
       owner_id: agentId,
       cases_total: cases.length,
       ...this.aggregate(batches),
       recent_runs: recent.map(toRunRecord),
-      alert: await this.alertFor(workspaceId, batches[0]),
+      alert: alertFor(batches[0]),
     };
   }
 
@@ -471,14 +522,24 @@ export class EvalsService {
       this.repo.listBatches(workspaceId),
       this.repo.recentRuns(workspaceId, { limit: RECENT_RUNS_LIMIT }),
     ]);
-    const batches = batchRows.map(toBatchSummary);
+
+    // The batch list is newest-first, so the first row seen for an owner IS that
+    // owner's newest batch. Those, plus the newest batch overall, are the only
+    // ones whose REC-2 flag anything reads — re-labelling the whole run history
+    // on every page load would buy nothing.
+    const newestPerAgent = new Map<string, BatchAggregateRow>();
+    for (const b of batchRows) if (!newestPerAgent.has(b.ownerId)) newestPerAgent.set(b.ownerId, b);
+    const flags = await this.precisionUndefinedByBatch(workspaceId, [
+      ...(batchRows[0] ? [batchRows[0].batchId] : []),
+      ...[...newestPerAgent.values()].map((b) => b.batchId),
+    ]);
+    const summary = (r: BatchAggregateRow) => toBatchSummary(r, flags.get(r.batchId) ?? true);
+    const batches = batchRows.map(summary);
 
     // Per-agent rows come out of the SAME batch list, grouped in JS — a batch
     // never spans two agents, so this needs no extra query per agent.
     const perAgent: AgentEvalSummary[] = agents.map((a) => {
-      const own = batchRows
-        .filter((b) => b.ownerId === a.id)
-        .map(toBatchSummary);
+      const own = batchRows.filter((b) => b.ownerId === a.id).map(summary);
       const { current, delta } = this.aggregate(own);
       return {
         agent_id: a.id,
@@ -487,6 +548,11 @@ export class EvalsService {
         current,
         delta,
         last_ran_at: own[0]?.ran_at ?? null,
+        // The agent's OWN newest batch, never the workspace `alert` below: that
+        // one is `batches[0]`, the newest batch across all agents, so it says
+        // nothing about this row. Absent a run at all, precision is vacuous by
+        // definition — and the client shows "—" for `last_ran_at: null` first.
+        precision_undefined: own[0]?.precision_undefined ?? true,
       };
     });
 
@@ -496,7 +562,7 @@ export class EvalsService {
       cases_total: casesTotal,
       ...this.aggregate(batches),
       recent_runs: recent.map(toRunRecord),
-      alert: await this.alertFor(workspaceId, batches[0]),
+      alert: alertFor(batches[0]),
       agents: perAgent,
     };
   }
@@ -541,30 +607,42 @@ export class EvalsService {
   }
 
   /**
-   * REC-2's alert, computed rather than guessed: re-label the latest batch's
-   * GROUNDED findings against their cases' expectations and see whether any of
-   * them landed on a labelled line. Deterministic, model-free, and it uses the
-   * same pure `classifyFindings` the scorer does — `precision === 1` alone
-   * cannot tell a real perfect score from a vacuous one.
+   * REC-2 per BATCH: did anything the batch produced land on a labelled line?
+   *
+   * Computed rather than guessed — re-label each row's GROUNDED findings against
+   * its own case's expectations with the same pure `classifyFindings` the scorer
+   * uses, so this can never disagree with the `precision` stored beside it.
+   * `precision === 1` alone cannot tell a real perfect score from a vacuous one,
+   * and there is no column to store the answer in (the feature adds no
+   * migration), so it is re-derived on read.
+   *
+   * One query for all the batches asked about, not one per batch: the batch
+   * history renders a precision per row and would otherwise cost a query each.
+   *
+   * A batch with no readable row stays `true`. "Nothing here demonstrates a
+   * measurement" is the safe answer, and it renders as "n/a" rather than as a
+   * 100% nobody earned.
    */
-  private async alertFor(
+  private async precisionUndefinedByBatch(
     workspaceId: string,
-    latest: EvalBatchSummary | undefined,
-  ): Promise<string | null> {
-    if (!latest) return null;
-    const rows = await this.repo.runsForBatch(workspaceId, latest.batch_id);
-    let labelled = 0;
-    for (const r of rows) {
+    batchIds: readonly string[],
+  ): Promise<Map<string, boolean>> {
+    const wanted = [...new Set(batchIds)];
+    const flags = new Map<string, boolean>(wanted.map((id) => [id, true]));
+    if (wanted.length === 0) return flags;
+
+    for (const r of await this.repo.runsForBatches(workspaceId, wanted)) {
       const expected = ExpectedOutput.safeParse(r.expectedOutput);
       const envelope = ActualOutput.safeParse(r.run.actualOutput);
       if (!expected.success || !envelope.success) continue;
       const grounded = new Set(envelope.data.grounded_ids);
       const kept = envelope.data.findings.filter((f) => grounded.has(f.id));
-      labelled += classifyFindings(expected.data.expectations, kept).filter(
+      const landed = classifyFindings(expected.data.expectations, kept).some(
         (l) => l !== 'ignored',
-      ).length;
+      );
+      if (landed) flags.set(envelope.data.batch_id, false);
     }
-    return labelled === 0 ? PRECISION_UNDEFINED_ALERT : null;
+    return flags;
   }
 
   /** 404 for both "no such agent" and "not your agent" (never 403). */
@@ -644,7 +722,13 @@ function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
-function toBatchSummary(row: BatchAggregateRow): EvalBatchSummary {
+/**
+ * `precisionUndefined` is a REQUIRED parameter, not an option with a default:
+ * it is only derivable from the batch's stored envelopes (see
+ * `precisionUndefinedByBatch`), so a caller that has not asked for it must be
+ * made to say so rather than silently emit `false` and print a flattering 100%.
+ */
+function toBatchSummary(row: BatchAggregateRow, precisionUndefined: boolean): EvalBatchSummary {
   const agent = EvalBatchSummary.shape.agent.safeParse(row.agent);
   return {
     batch_id: row.batchId,
@@ -659,7 +743,18 @@ function toBatchSummary(row: BatchAggregateRow): EvalBatchSummary {
     // modal must say "snapshot unavailable" rather than render a blank diff —
     // a blank diff reads as "the prompts are identical".
     agent: agent.success ? agent.data : null,
+    precision_undefined: precisionUndefined,
   };
+}
+
+/**
+ * REC-2's dashboard-level alert: the prose form of the NEWEST batch's
+ * `precision_undefined`, and nothing more. It is the whole-dashboard banner, so
+ * it describes exactly one batch — per-agent and per-batch rows read their own
+ * flag instead.
+ */
+function alertFor(latest: EvalBatchSummary | undefined): string | null {
+  return latest?.precision_undefined ? PRECISION_UNDEFINED_ALERT : null;
 }
 
 /** `avg()` can return 0.9999999999999999; the contract bounds these to [0,1]. */

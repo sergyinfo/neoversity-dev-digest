@@ -63,21 +63,66 @@ function sameLocation(expectation: EvalExpectation, finding: Finding): boolean {
 }
 
 /**
- * Greedy expectation → finding assignment, in file order.
+ * Byte comparison, NOT `localeCompare`.
+ *
+ * `localeCompare` consults the runtime's collation, so its answer for two file
+ * paths or two finding ids can differ between machines with different `LANG`
+ * settings. A scorer whose output depends on an environment variable is not the
+ * deterministic scorer this file promises to be.
+ */
+function byBytes(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * `must_find` is walked before `must_not_flag` — see `matchFindings`. Any new
+ * expectation kind must be given a rank here deliberately, not inherit one.
+ */
+const KIND_RANK: Record<EvalExpectation['kind'], number> = {
+  must_find: 0,
+  must_not_flag: 1,
+};
+
+/**
+ * Greedy expectation → finding assignment.
  *
  * Returns one `EvalMatch` per expectation, in the expectations' ORIGINAL order,
  * because `EvalMatch.expectation_index` indexes back into the stored
  * `ExpectedOutput.expectations` array (contract.ts) and the envelope would be
  * unreadable if the indices were the sorted ones.
  *
- * The WALK, however, is in file order — `(file, start_line, end_line, original
- * index)` — so the result depends only on the CONTENT of the inputs and not on
- * the order they happen to arrive in. Two expectations on the same lines are
- * therefore resolved by their original index, deterministically, and the second
- * gets `finding_id: null` rather than a second bite at the same finding
- * (Edge-6).
+ * ## The walk order, and what it buys
  *
- * A finding, once claimed, is not offered to any later expectation.
+ * BOTH sides are walked in a content-derived order, never in array order:
+ *
+ *  - expectations by `(kind, file, start_line, end_line)`
+ *  - findings by `(file, start_line, end_line, id)`
+ *
+ * so which finding satisfies which expectation depends on what the inputs SAY,
+ * not on the order they happened to arrive in. Ties fall back to the original
+ * index, and a tie means the two entries are interchangeable under the match
+ * rule anyway. (The findings half of this was missing: the inner loop used to
+ * walk `findings` in array order, so re-ordering two findings that both overlap
+ * one expectation changed the stored `finding_id`.)
+ *
+ * `kind` leads, so `must_find` claims before `must_not_flag`. That is what keeps
+ * this function agreeing with `classifyFindings`, which deliberately lets
+ * `must_find` win a finding overlapping both kinds: without it, expectations
+ * `[must_not_flag a.ts 10-20, must_find a.ts 10-20]` and one finding at
+ * `a.ts:15` produced `pass: false` while precision scored the very same finding
+ * `tp` — one row, two numbers, disagreeing about one finding — and merely
+ * swapping the two array positions flipped `pass`. It also removes the need for
+ * the seed's data-side workaround ("no case ever asks the agent to both find and
+ * not find the same lines").
+ *
+ * The agreement is NOT total, and this file does not claim it is: greedy
+ * one-to-one can still hand a `must_not_flag` a *different* finding that also
+ * overlaps a `must_find`, when that `must_find` has already claimed another one.
+ * The two functions answer different questions (see the header); what is
+ * guaranteed is that a finding a `must_find` can still claim is never taken by a
+ * `must_not_flag` first.
+ *
+ * A finding, once claimed, is not offered to any later expectation (Edge-6).
  */
 export function matchFindings(
   expectations: readonly EvalExpectation[],
@@ -92,20 +137,33 @@ export function matchFindings(
     .map((expectation, index) => ({ expectation, index }))
     .sort(
       (a, b) =>
-        a.expectation.file.localeCompare(b.expectation.file) ||
+        KIND_RANK[a.expectation.kind] - KIND_RANK[b.expectation.kind] ||
+        byBytes(a.expectation.file, b.expectation.file) ||
         a.expectation.start_line - b.expectation.start_line ||
         a.expectation.end_line - b.expectation.end_line ||
         a.index - b.index,
     );
 
+  const candidates = findings
+    .map((finding, index) => ({ finding, index }))
+    .sort(
+      (a, b) =>
+        byBytes(a.finding.file, b.finding.file) ||
+        a.finding.start_line - b.finding.start_line ||
+        a.finding.end_line - b.finding.end_line ||
+        byBytes(a.finding.id, b.finding.id) ||
+        a.index - b.index,
+    );
+
+  // Claims are keyed by the finding's ORIGINAL index, so the sort above changes
+  // only which finding is offered first, never which set is available.
   const claimed = new Set<number>();
   for (const { expectation, index } of order) {
-    for (let f = 0; f < findings.length; f += 1) {
-      if (claimed.has(f)) continue;
-      const finding = findings[f]!;
-      if (!sameLocation(expectation, finding)) continue;
-      claimed.add(f);
-      matches[index]!.finding_id = finding.id;
+    for (const candidate of candidates) {
+      if (claimed.has(candidate.index)) continue;
+      if (!sameLocation(expectation, candidate.finding)) continue;
+      claimed.add(candidate.index);
+      matches[index]!.finding_id = candidate.finding.id;
       break;
     }
   }

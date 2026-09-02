@@ -39,6 +39,7 @@ function batch(over: Partial<EvalBatchSummary> = {}): EvalBatchSummary {
     traces_total: 10,
     cost_usd: 0.12,
     agent: agent(),
+    precision_undefined: false,
     ...over,
   };
 }
@@ -103,5 +104,50 @@ describe("CompareModal — nullable agent snapshot (fix brief)", () => {
     render(<CompareModal oldBatch={oldBatch} newBatch={newBatch} onClose={vi.fn()} />);
 
     expect(screen.getByText(/snapshot unavailable/i)).toBeInTheDocument();
+  });
+});
+
+describe("CompareModal — long prompts do not allocate a quadratic matrix (fix brief F5)", () => {
+  /**
+   * 8,000 words with a newline every 10, so the text has ~800 lines. Split on
+   * whitespace that is ~16,000 tokens, and the word-level DP over two of these
+   * is 16,000 x 16,000 = 256M cells — roughly 2 GB of JS numbers. Before the
+   * length guard this render allocated exactly that and froze (or killed) the
+   * tab; the test below would not have completed at all.
+   */
+  function longPrompt(marker: string): string {
+    const words = Array.from({ length: 8_000 }, (_, i) => (i === 4_000 ? marker : `word${i}`));
+    return words.map((w, i) => (i > 0 && i % 10 === 0 ? `\n${w}` : w)).join(" ");
+  }
+
+  it("renders a usable diff for two ~8,000-word prompts", { timeout: 10_000 }, () => {
+    const oldBatch = batch({ agent: agent({ system_prompt: longPrompt("BEFOREWORD") }) });
+    const newBatch = batch({ agent: agent({ system_prompt: longPrompt("AFTERWORD") }) });
+
+    const { container } = render(
+      <CompareModal oldBatch={oldBatch} newBatch={newBatch} onClose={vi.fn()} />,
+    );
+
+    // It is a real diff, not the "snapshot unavailable" or "identical" branch:
+    // the one line that actually changed is present on both sides.
+    expect(screen.getByText(/BEFOREWORD/)).toBeInTheDocument();
+    expect(screen.getByText(/AFTERWORD/)).toBeInTheDocument();
+    expect(screen.queryByText(/snapshot unavailable/i)).not.toBeInTheDocument();
+
+    // ...and it fell back to LINE granularity rather than emitting a span per
+    // word. ~800 lines a side, so a few thousand spans at most — where word
+    // granularity would be ~32,000 (if it had survived the allocation).
+    expect(container.querySelectorAll("span").length).toBeLessThan(5_000);
+  });
+
+  it("still diffs by WORD at ordinary prompt lengths", () => {
+    const oldBatch = batch({ agent: agent({ system_prompt: "You are a careful security reviewer." }) });
+    const newBatch = batch({ agent: agent({ system_prompt: "You are a thorough security reviewer." }) });
+    render(<CompareModal oldBatch={oldBatch} newBatch={newBatch} onClose={vi.fn()} />);
+
+    // A whole-line fallback would render the entire sentence as one del + one
+    // add; word granularity isolates the single word that moved.
+    expect(screen.getByText("careful")).toBeInTheDocument();
+    expect(screen.getByText("thorough")).toBeInTheDocument();
   });
 });

@@ -247,10 +247,12 @@ describe('EvalBatchSummary', () => {
       traces_total: 8,
       cost_usd: 0.0123,
       agent,
+      precision_undefined: false,
     });
 
     expect(parsed.traces_passed).toBe(6);
     expect(parsed.agent?.system_prompt).toBe('You are a security reviewer.');
+    expect(parsed.precision_undefined).toBe(false);
   });
 
   it('allows a null agent and a null cost, and reports a partial batch (Edge-7)', () => {
@@ -265,6 +267,7 @@ describe('EvalBatchSummary', () => {
       traces_total: 2,
       cost_usd: null,
       agent: null,
+      precision_undefined: true,
     });
 
     expect(parsed.agent).toBeNull();
@@ -283,8 +286,34 @@ describe('EvalBatchSummary', () => {
       traces_total: 1,
       cost_usd: null,
       agent: null,
+      precision_undefined: false,
     };
     expect(EvalBatchSummary.safeParse({ ...base, recall: 1.5 }).success).toBe(false);
     expect(EvalBatchSummary.safeParse({ ...base, precision: -0.1 }).success).toBe(false);
+  });
+
+  /**
+   * REC-2 per batch (fix brief F3). `precision_undefined` is REQUIRED rather
+   * than optional-with-a-default: the batch-history table prints a precision per
+   * row, and a summary built without the flag would silently render the vacuous
+   * `precision: 1` as a flattering 100%. A missing key must fail loudly here.
+   */
+  it('requires precision_undefined — it may not default to "the number is real"', () => {
+    const base = {
+      batch_id: 'b-4',
+      ran_at: '2026-09-03T10:00:00.000Z',
+      recall: 1,
+      // 1 by the TP + FP = 0 rule, not by merit — indistinguishable without the flag.
+      precision: 1,
+      citation_accuracy: 1,
+      traces_passed: 1,
+      traces_total: 1,
+      cost_usd: null,
+      agent: null,
+    };
+    expect(EvalBatchSummary.safeParse(base).success).toBe(false);
+    expect(EvalBatchSummary.parse({ ...base, precision_undefined: true }).precision_undefined).toBe(
+      true,
+    );
   });
 });

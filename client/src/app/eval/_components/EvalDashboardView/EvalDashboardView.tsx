@@ -25,6 +25,15 @@ import { s } from "./styles";
 const TABLE_COLS_OVERVIEW = "150px 130px 70px 70px 70px 80px";
 const TABLE_COLS_BATCHES = "34px 150px 70px 70px 70px 90px 80px";
 
+/**
+ * REC-2's rendering of a vacuous precision. Distinct from the "—" used for a
+ * value that is simply ABSENT (an agent that has never run): "n/a" means the
+ * run happened and the number it produced is not meaningful. The same literal
+ * the drill-down `MetricCard` already uses, kept as one constant so the three
+ * surfaces cannot drift apart.
+ */
+const NOT_APPLICABLE = "n/a";
+
 function pct(v: number): string {
   return `${Math.round(v * 100)}%`;
 }
@@ -121,7 +130,7 @@ export function EvalDashboardView() {
                 />
                 <MetricCard
                   label={t("dashboard.metrics.precision")}
-                  value={precisionNA ? "n/a" : dash ? Math.round(dash.current.precision * 100) : 0}
+                  value={precisionNA ? NOT_APPLICABLE : dash ? Math.round(dash.current.precision * 100) : 0}
                   suffix={precisionNA ? undefined : "%"}
                   delta={precisionNA ? undefined : dash?.delta.precision}
                   color="var(--ok)"
@@ -213,7 +222,10 @@ export function EvalDashboardView() {
                   </div>
                   <span className="mono tnum">{fmtDate(b.ran_at)}</span>
                   <span className="tnum">{pct(b.recall)}</span>
-                  <span className="tnum">{pct(b.precision)}</span>
+                  {/* REC-2 per ROW: each batch carries its own flag. The
+                      dashboard-level `alert` describes only the newest batch,
+                      so it cannot annotate the older rows in this history. */}
+                  <span className="tnum">{b.precision_undefined ? NOT_APPLICABLE : pct(b.precision)}</span>
                   <span className="tnum">{pct(b.citation_accuracy)}</span>
                   <span className="tnum">
                     {b.traces_passed}/{b.traces_total}
@@ -275,7 +287,13 @@ export function EvalDashboardView() {
                 <div style={s.mini}>
                   <div style={s.miniLabel}>{t("dashboard.metrics.precision")}</div>
                   <div className="tnum" style={{ ...s.miniValue, color: "var(--ok)" }}>
-                    {a.last_ran_at ? pct(a.current.precision) : "—"}
+                    {/* REC-2 per AGENT. `a.current.precision` is 1 whenever
+                        nothing this agent produced landed on a labelled line,
+                        and printing that as 100% credits an agent that has
+                        demonstrated nothing. The workspace `alert` cannot stand
+                        in: it is derived from the newest batch across ALL
+                        agents. */}
+                    {!a.last_ran_at ? "—" : a.precision_undefined ? NOT_APPLICABLE : pct(a.current.precision)}
                   </div>
                 </div>
                 <div style={s.mini}>
