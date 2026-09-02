@@ -34,10 +34,18 @@ env:
   # endpoint. Set it to `anthropic` to run against Anthropic directly with the models that
   # the gate thresholds were actually calibrated on.
   EVAL_PROVIDER: openrouter
-  # The repo's recommended cheap upgrade — "same family/provider, drop-in, clearly
-  # stronger reasoning. Start here." ~$0.006 per review.
-  EVAL_MODEL: deepseek/deepseek-v4-pro
-  # The general check that fires when a CLAUDE.md changes runs on Gemini.
+  # Measured on one security case against the Opus baseline in history/, not chosen from
+  # the price table. deepseek/deepseek-v4-pro — the repo guide's recommended cheap upgrade
+  # — was tried first and rejected: 3 of 6 executor runs ended their turn without ever
+  # calling Write, on both arms, once after 17 tool calls. A ~50% no-op rate cannot carry
+  # a 24-run job, and because it lands more often on the unstructured baseline it inflates
+  # the delta in the skill's favour. haiku-4.5 reproduced Opus exactly on that case
+  # (4/4 vs 3/4, delta +0.25) at 28s per run against Opus's 145s, with no retries.
+  EVAL_MODEL: anthropic/claude-haiku-4.5
+  # The general check that fires when a CLAUDE.md changes runs on Gemini. It drives the
+  # tool loop correctly, but costs ~574k tokens and 158s per run here against haiku's 59k
+  # and 28s — prompt caching does not appear to survive this route. Acceptable for a check
+  # that fires rarely and runs one case; reconsider if the guide suite grows.
   EVAL_MODEL_GUIDE: google/gemini-3.6-flash
   # The judge stays on a strong model: it decides pass/fail, and its verdicts are compared
   # against history graded by Claude. Only the agent-grader suites use it.

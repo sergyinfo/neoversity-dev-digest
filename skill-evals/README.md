@@ -106,9 +106,16 @@ Two workflows, and the split between them is the point.
 **`evals-pr.yml` — screening, per PR.** `skill-evals/ci/plan.mjs` reads
 `git diff --name-only` and routes: a changed skill runs its own suite, a changed
 `CLAUDE.md` runs the repo-guide suite, a changed agent runs that agent's suite. One run
-per arm on `deepseek/deepseek-v4-pro` (~$0.72 for the whole security suite against ~$7 on
-Opus); the repo-guide check runs on `google/gemini-3.6-flash`. Model policy lives in the
-`env:` block at the top of the workflow.
+per arm on `anthropic/claude-haiku-4.5` (28s per run against Opus's 145s); the repo-guide
+check runs on `google/gemini-3.6-flash`. Model policy lives in the `env:` block at the top
+of the workflow, with the measurement behind each choice.
+
+Executor models are picked by running them, not from the price table.
+`deepseek/deepseek-v4-pro` looked right on cost and failed on reliability: 3 of 6 runs
+ended the turn without ever calling `Write`. That failure is not neutral between the arms —
+it lands more often on the baseline, which has no step-by-step skill holding it on task, so
+it inflates the delta in the skill's favour. See
+`history/iteration-12-openrouter-models/`.
 
 **Anything without a suite is skipped, named in the job summary, and is not a failure** —
 today that is 10 of 13 skills, all 8 agents, and the repo guides. Check the routing before

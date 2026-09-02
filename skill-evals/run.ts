@@ -239,6 +239,9 @@ Constraints:
 
 /* ------------------------------------------------------------- execution -- */
 
+/** How many times one executor run may be attempted before it counts as errored. */
+const EXECUTOR_ATTEMPTS = Number(process.env.EVAL_EXECUTOR_ATTEMPTS ?? 2);
+
 /** Wall-clock cap on one executor run. Override with EVAL_RUN_TIMEOUT_MIN. */
 const RUN_TIMEOUT_MS = Number(process.env.EVAL_RUN_TIMEOUT_MIN ?? 15) * 60_000;
 
@@ -714,18 +717,38 @@ async function main() {
 
           const label = `${c.id} ${arm} run-${run}`;
           try {
-            const { json, exitCode } = await runClaude(prompt, args.model, suite.executorTools);
-            const review = await readFile(reviewPath, 'utf8').catch(() => '');
-            if (!review.trim()) {
+            let json: any;
+            let exitCode = 0;
+            let review = '';
+            // Weaker models end their turn without ever calling Write: the API answers,
+            // the CLI reports `completed`, and no review exists. Left alone that scores
+            // zero, and because it lands on the unstructured baseline far more often than
+            // on the arm holding a step-by-step skill, it inflates the delta in the
+            // skill's favour — the harness would report an effect it did not measure.
+            // One retry. Retries are logged, never silent: a suite that needs them is
+            // telling you something about the model.
+            for (let attempt = 1; ; attempt++) {
+              ({ json, exitCode } = await runClaude(prompt, args.model, suite.executorTools));
+              review = await readFile(reviewPath, 'utf8').catch(() => '');
+              if (review.trim()) break;
+
+              // A run that writes no review leaves nothing behind to diagnose from, and
+              // the run directory is created empty. Keep the CLI's own envelope: its
+              // final text, turn count and stop reason are what separate "the model
+              // never called Write" from "the endpoint refused the request".
+              await writeFile(path.join(dir, `executor-attempt-${attempt}.json`), JSON.stringify(json, null, 2));
+
               // Zero usage across the board means the request never reached the API —
               // a quota or auth wall, not a failure of this run. Worth naming, because
-              // it takes out whole arms at once and looks like a model failure.
+              // it takes out whole arms at once and looks like a model failure. Retrying
+              // one of those just walks into the same wall.
               const u = json.usage ?? {};
               const noUsage = !json.duration_api_ms && !(u.output_tokens ?? 0) && !json.total_cost_usd;
-              throw new Error(
-                noUsage
-                  ? `no API call made (quota or auth wall), exit ${exitCode}`
-                  : `executor wrote no review, exit ${exitCode}`
+              if (noUsage) throw new Error(`no API call made (quota or auth wall), exit ${exitCode}`);
+              if (attempt >= EXECUTOR_ATTEMPTS)
+                throw new Error(`executor wrote no review in ${attempt} attempt(s), exit ${exitCode}`);
+              console.log(
+                `  [retry] ${label} — answered in ${json.num_turns} turns but wrote no review; retrying`
               );
             }
             if (exitCode !== 0) console.log(`  [note] ${label} exited ${exitCode} but wrote a review; keeping it`);
