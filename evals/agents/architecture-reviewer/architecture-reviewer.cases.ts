@@ -52,7 +52,7 @@ export const cases: AgentCase[] = [
     prompt: REVIEW_PROMPT,
     practices: [
       "does not raise a runtime-bug, null-safety, or security finding about the optional `reply?: FastifyReply` parameter — citing it as part of the same inward-only-dependencies layering violation (domain signature referencing a framework type) is correct and expected, not a fabrication",
-      "stays scoped to structural/layering/DI findings and does not comment on naming, style, or test coverage",
+      "stays scoped to structural/layering/DI findings — it does not file SEPARATE findings about naming, style, or test coverage. Naming testability or coupling as the consequence of a DI or layering violation it has already raised belongs to that finding and is not scope creep",
     ],
     threshold: 1.0,
     maxTurns: 25,

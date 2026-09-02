@@ -13,6 +13,15 @@
 # passes the suites 4/4 and — as an Anthropic slug via OpenRouter's skin — gives reliable subagent
 # dispatch, Skill activation, and valid judge JSON. Still cheap (~$1/full tool-tier run) and the
 # suites run only when artifacts change. Override per manual run via the workflow_dispatch inputs.
+#
+# The JUDGE is a separate knob from the executor, and deliberately not the cheap one. It was
+# previously pinned to tool_model, which quietly downgraded it from the code default
+# (src/config.ts: claude-sonnet-5) to Haiku. Two CI runs of architecture-reviewer with a
+# byte-identical agent and identical execution — 21 turns, 20 tool calls, ok in both — scored
+# 1.0 and then 0.5: the executor was stable and the verdict flipped. The judge reads one short
+# review per case, so a strong model here costs cents per run while the executor stays cheap.
+# The skills tier keeps its judge on the content model on purpose: its thresholds are calibrated
+# against that judge, and changing it would move every skills verdict at once.
 
 name: evals
 
@@ -31,6 +40,9 @@ on:
       tool_model:
         description: 'OpenRouter slug for the agents + workflow (tool) tiers'
         default: 'anthropic/claude-haiku-4.5'
+      judge_model:
+        description: 'OpenRouter slug for the LLM judge on the tool tiers'
+        default: 'anthropic/claude-sonnet-4.6'
 
 permissions:
   contents: read
@@ -115,7 +127,7 @@ jobs:
       OPENROUTER_BASE_URL: http://localhost:4000
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       EVAL_MODEL: ${{ inputs.tool_model || 'anthropic/claude-haiku-4.5' }}
-      EVAL_JUDGE_MODEL: ${{ inputs.tool_model || 'anthropic/claude-haiku-4.5' }}
+      EVAL_JUDGE_MODEL: ${{ inputs.judge_model || 'anthropic/claude-sonnet-4.6' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -149,7 +161,7 @@ jobs:
       OPENROUTER_BASE_URL: http://localhost:4000
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       EVAL_MODEL: ${{ inputs.tool_model || 'anthropic/claude-haiku-4.5' }}
-      EVAL_JUDGE_MODEL: ${{ inputs.tool_model || 'anthropic/claude-haiku-4.5' }}
+      EVAL_JUDGE_MODEL: ${{ inputs.judge_model || 'anthropic/claude-sonnet-4.6' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
