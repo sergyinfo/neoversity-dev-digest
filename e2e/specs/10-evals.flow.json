@@ -1,0 +1,96 @@
+{
+  "name": "Eval Dashboard, the two-batch Compare gate, the Agent Editor's Evals tab, and the finding card's eval-case affordance",
+  "description": "S15 of docs/plans/eval-pipeline.md (REC-7). Entirely read-only: it makes NO POST, never presses 'Run eval', and never clicks 'Turn into eval case' — clicking any of those would mutate the freshly-seeded database (breaking the precondition flows 02/04/05 depend on) and 'Run eval' would additionally call a model, which no flow in this repo does (e2e/README.md; flow 08's own note 'no POST is made anywhere in this flow'). Everything asserted here is therefore seeded, not produced: S12 part 2 seeds 9 eval cases owned by the Security Reviewer plus TWO synthetic eval_runs batches ('baseline' at 2026-08-27 and a deliberately degraded prompt at 2026-08-28) whose metrics differ visibly and whose agent.system_prompt snapshots differ textually — which is what gives the Compare modal a real delta and a real prompt diff to render. The compare selection itself is client state only (React useState in EvalDashboardView), so ticking two checkboxes writes nothing. The dashboard's batch table lives on the per-agent drill-down, not the overview, so the flow clicks the agent row first. On PR #482 the flow expands two findings that are guaranteed NOT to be the auto-expanded first card (that is a CRITICAL; both of these are WARNING): 'N+1 query in user list endpoint' carries acceptedAt in the seed, so its 'Turn into eval case' button must be ENABLED, and '429 response omits Retry-After' carries neither acceptedAt nor dismissedAt, so the same button must be DISABLED and carry its reason in the title attribute (AC-3) — asserted with `wait --fn` against the button's own `disabled` property, scoped to the card by `data-finding-id`, because 'disabled' is not visible text. Assumes a freshly-seeded DB where acme/payments-api (PR #482) is the first repo — guaranteed by e2e-web.yml; run locally via the hermetic stack (see e2e/README.md).",
+  "steps": [
+    { "cmd": ["open", "{BASE}/eval"], "label": "load the Eval Dashboard" },
+    { "cmd": ["wait", "--url", "/eval"], "label": "eval route reached" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "workspace dashboard data settles" },
+    { "cmd": ["wait", "--text", "Eval Dashboard"], "label": "page title renders" },
+    { "cmd": ["wait", "--text", "Security Reviewer"], "label": "the seeded agent's row renders" },
+    { "cmd": ["wait", "--text", "CITATION ACCURACY"], "label": "the agent row carries its three metrics" },
+    { "cmd": ["wait", "--text", "Recent runs"], "label": "the cross-agent recent-runs section renders" },
+    { "cmd": ["wait", "--text", "Ran at"], "label": "the recent-runs table header renders (so the table has rows, not the empty state)" },
+
+    { "cmd": ["find", "text", "Security Reviewer", "click"], "label": "drill into the seeded agent — the batch table and Compare live here, not on the overview" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "the agent's trend and batch history settle" },
+    { "cmd": ["wait", "--text", "Metric trend"], "label": "the per-agent metric trend renders" },
+    { "cmd": ["wait", "--text", "0 selected — pick exactly two to compare"], "label": "no batch selected yet" },
+    {
+      "cmd": ["wait", "--fn", "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Compare'&&b.disabled)"],
+      "label": "AC-19 — Compare is disabled at 0 selections"
+    },
+
+    { "cmd": ["find", "nth", "0", "[role=checkbox]", "click"], "label": "select the FIRST batch (client state only — no request is made)" },
+    { "cmd": ["wait", "--text", "1 selected — pick exactly two to compare"], "label": "one batch selected" },
+    {
+      "cmd": ["wait", "--fn", "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Compare'&&b.disabled)"],
+      "label": "AC-19 — one selection still leaves Compare disabled"
+    },
+
+    { "cmd": ["find", "nth", "1", "[role=checkbox]", "click"], "label": "select the SECOND batch" },
+    { "cmd": ["wait", "--text", "2 selected"], "label": "two batches selected" },
+    {
+      "cmd": ["wait", "--fn", "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Compare'&&!b.disabled)"],
+      "label": "AC-18 — Compare enables at exactly two selections"
+    },
+
+    { "cmd": ["find", "role", "button", "click", "--name", "Compare"], "label": "open the compare modal (reads the two batches already loaded — no request)" },
+    { "cmd": ["wait", "--text", "Old batch vs new — metric deltas and a prompt diff"], "label": "the compare modal is open" },
+    { "cmd": ["wait", "--text", "Citation accuracy"], "label": "the modal renders the third metric's old → new card" },
+    {
+      "cmd": ["wait", "--fn", "/[▲▼]/.test(document.body.innerText)"],
+      "label": "at least one metric moved between the two batches — the Δ marker renders (the two seeded batches differ by design)"
+    },
+    { "cmd": ["wait", "--text", "System prompt diff"], "label": "the prompt diff section renders" },
+    {
+      "cmd": ["wait", "--text", "Report every issue you notice"],
+      "label": "a REAL prompt diff — this sentence exists only in the degraded batch's snapshot, so it can only come from the diff"
+    },
+
+    { "cmd": ["open", "{BASE}/agents"], "label": "the Agent Editor's Evals tab" },
+    { "cmd": ["wait", "--url", "/agents"], "label": "agents route reached" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "agents list settles" },
+    { "cmd": ["find", "text", "Security Reviewer", "click"], "label": "open the same agent's editor" },
+    { "cmd": ["wait", "--url", "/agents/"], "label": "agent editor route reached" },
+    { "cmd": ["find", "role", "button", "click", "--name", "Evals"], "label": "switch to the Evals tab" },
+    { "cmd": ["wait", "--url", "tab=evals"], "label": "evals tab is active in the URL (TABS and page.tsx's VALID_TABS are both wired — an omitted key silently renders Config)" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "the agent's cases and dashboard settle" },
+    { "cmd": ["wait", "--text", "Eval metrics"], "label": "the metric strip's heading renders" },
+    { "cmd": ["wait", "--text", "RECALL"], "label": "metric card 1 of 3" },
+    { "cmd": ["wait", "--text", "PRECISION"], "label": "metric card 2 of 3" },
+    { "cmd": ["wait", "--text", "CITATION ACCURACY"], "label": "metric card 3 of 3" },
+    { "cmd": ["wait", "--text", "Eval cases"], "label": "the case list heading renders" },
+    {
+      "cmd": ["wait", "--text", "src/config.ts:12-12 — Hardcoded Stripe secret key in commit"],
+      "label": "a seeded case renders under its `file:start-end — title` name"
+    },
+
+    { "cmd": ["open", "{BASE}/"], "label": "the finding card's eval-case affordance (AC-3)" },
+    { "cmd": ["wait", "--url", "/pulls"], "label": "land on the PR list" },
+    { "cmd": ["find", "text", "Add rate limiting to public API endpoints", "click"], "label": "open the PR row" },
+    { "cmd": ["wait", "--url", "/pulls/482"], "label": "navigate to the PR detail route" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "PR detail data settles" },
+    { "cmd": ["find", "role", "button", "click", "--name", "Agent runs"], "label": "switch to the Agent runs tab" },
+    { "cmd": ["wait", "--url", "tab=findings"], "label": "findings tab is active in the URL" },
+    { "cmd": ["wait", "--text", "13 findings"], "label": "the seeded run's findings are listed" },
+
+    {
+      "cmd": ["find", "text", "N+1 query in user list endpoint", "click"],
+      "label": "expand a LABELLED finding (acceptedAt in the seed) — WARNING, so never the auto-expanded first card"
+    },
+    { "cmd": ["wait", "--text", "Turn into eval case"], "label": "the eval-case button is present on the expanded card" },
+    {
+      "cmd": ["wait", "--fn", "[...document.querySelectorAll('[data-finding-id]')].filter(e=>e.textContent.includes('N+1 query in user list endpoint')).some(c=>[...c.querySelectorAll('button')].some(b=>b.textContent.trim()==='Turn into eval case'&&!b.disabled))"],
+      "label": "AC-3 — ENABLED on a labelled finding (the flow never clicks it: that would POST)"
+    },
+
+    {
+      "cmd": ["find", "text", "429 response omits Retry-After", "click"],
+      "label": "expand an UNLABELLED finding (neither acceptedAt nor dismissedAt) — also WARNING"
+    },
+    {
+      "cmd": ["wait", "--fn", "[...document.querySelectorAll('[data-finding-id]')].filter(e=>e.textContent.includes('429 response omits Retry-After')).some(c=>[...c.querySelectorAll('button')].some(b=>b.textContent.trim()==='Turn into eval case'&&b.disabled&&b.title.includes('Accept or dismiss this finding first')))"],
+      "label": "AC-3 — DISABLED (not hidden) on an unlabelled finding, with the reason in its tooltip"
+    }
+  ]
+}

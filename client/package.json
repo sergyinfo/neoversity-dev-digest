@@ -8,7 +8,8 @@
     "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "verify:l03": "../scripts/verify-l03.sh"
+    "verify:l03": "../scripts/verify-l03.sh",
+    "verify:l06": "../scripts/verify-l06.sh"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.8",

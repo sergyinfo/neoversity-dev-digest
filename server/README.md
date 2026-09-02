@@ -79,12 +79,28 @@ flowchart TB
     repoIntel["repo-intel<br/>/repos/:id/index-state · /resync"]
     blast["blast<br/>/pulls/:id/blast · /pulls/:id/blast/summary"]
   end
+  subgraph Evals["Evals (L06)"]
+    evalCases["evals · cases<br/>POST /findings/:id/eval-case · GET /agents/:id/eval-cases<br/>DELETE /eval-cases/:id"]
+    evalRuns["evals · runs<br/>POST /agents/:id/eval-runs (synchronous, 10/min)<br/>GET /agents/:id/eval-runs (batches)"]
+    evalDash["evals · dashboards<br/>GET /agents/:id/eval-dashboard · GET /eval-dashboard"]
+  end
   subgraph Platform["Platform"]
     settings["settings<br/>/settings · /providers"]
     workspace["workspace<br/>/workspace"]
   end
   HEALTH["/health (liveness) · /health/ready (DB ping → 200/503)"]
 ```
+
+- **Evals** turns an accepted or dismissed finding into a replayable eval case
+  (`expected_output` is derived server-side from the finding row and never
+  accepted from the client), then replays an agent over the whole set from the
+  stored `input_diff` only — no live repo, PR, or index read. Scoring is
+  deterministic code with **zero model calls**. `POST /agents/:id/eval-runs` is
+  the one synchronous multi-LLM route: it caps at 50 cases and carries the same
+  `{ max: 10, timeWindow: '1 minute' }` limit as `POST /pulls/:id/review`.
+  `GET /agents/:id/eval-runs` lists **batches**, not rows — one run writes one
+  row per case sharing a `batch_id` stored inside `actual_output` (the feature
+  adds no column, and both tables ship in `0000_init.sql`).
 
 ## Environment
 
