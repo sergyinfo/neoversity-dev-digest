@@ -239,6 +239,9 @@ Constraints:
 
 /* ------------------------------------------------------------- execution -- */
 
+/** Wall-clock cap on one executor run. Override with EVAL_RUN_TIMEOUT_MIN. */
+const RUN_TIMEOUT_MS = Number(process.env.EVAL_RUN_TIMEOUT_MIN ?? 15) * 60_000;
+
 function runClaude(
   prompt: string,
   model: string,
@@ -274,10 +277,36 @@ function runClaude(
     const child = spawn('claude', args, { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
+
+    // A misconfigured endpoint does not fail — it hangs. Pointed at a gateway with no
+    // usable credentials the CLI produced no output and no exit for minutes, and with
+    // nothing bounding it here a few such runs would consume the whole CI job and leave
+    // no benchmark to explain why. The cap is generous: the slowest real run measured is
+    // the dependency-checker repo audit at ~7 minutes.
+    let timer: NodeJS.Timeout | undefined;
+    const done = () => clearTimeout(timer);
+    timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      // SIGTERM is a request. Escalate rather than trade one hang for another.
+      setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
+      reject(
+        new Error(
+          `claude produced no exit within ${RUN_TIMEOUT_MS / 60_000} min (model=${model}). ` +
+            `Wrote ${out.length} bytes. A hang here is usually auth or a base URL that ` +
+            `accepts the connection but never answers — check the endpoint before the suite.`,
+        ),
+      );
+    }, RUN_TIMEOUT_MS);
+    timer.unref();
+
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (err += d));
-    child.on('error', reject);
+    child.on('error', (e) => {
+      done();
+      reject(e);
+    });
     child.on('close', (code) => {
+      done();
       // A non-zero exit does not mean nothing happened: runs have written a complete
       // review and then exited 1. Whether the run is usable is decided by the caller,
       // from the output on disk.

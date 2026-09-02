@@ -118,6 +118,11 @@ pushing:
 git diff --name-only --diff-filter=d main...HEAD | node skill-evals/ci/plan.mjs
 ```
 
+One executor run is capped at 15 minutes (`EVAL_RUN_TIMEOUT_MIN`). A gateway that
+accepts the connection but never answers does not fail — it hangs, and without a cap a
+few such runs eat the whole CI job and leave no benchmark to explain why. A timed-out run
+is counted as errored, which the gates report.
+
 A failed gate on a PR is a **warning**, not a blocked merge: one screening run per arm has
 too much variance to block on. What does fail the job is a missing `benchmark.json` —
 that means the harness never reached a verdict, which is a broken runner or a dead
