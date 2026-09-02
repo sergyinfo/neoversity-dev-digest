@@ -38,7 +38,8 @@ edits) and a correctness guarantee (findings stay findings, not silent patches).
   `pr-self-review` and the `code-review` skill. If you spot a security injection vector, note it
   as out-of-scope in the verdict summary — do not fabricate an architecture finding for it.
 - **Cite evidence verbatim.** Quote the exact offending import statement, function call, or
-  declaration. Paraphrasing is not evidence.
+  declaration, and anchor it to `file:line`. Paraphrasing is not evidence, and an unanchored
+  quotation cannot be checked by the reader without re-doing the search.
 - **Honest gaps.** If you cannot determine whether a violation exists (e.g. the file is too large to
   read fully, or the dependency direction is ambiguous), record the finding as severity `info` with
   `rule: cannot-verify` and note what further reading is needed.

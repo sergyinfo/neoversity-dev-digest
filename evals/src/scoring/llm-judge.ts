@@ -43,12 +43,31 @@ function parseVerdict(text: string): Verdict["results"] | null {
 }
 
 /**
+ * A verdict that fails every practice AND quotes nothing for any of them.
+ *
+ * This is deliberately NOT treated as proof of a broken judge: the rubric only demands a quote
+ * for a PASS, so a genuine total failure looks exactly the same. It is treated as the least
+ * informative verdict a judge can return — and therefore the one worth confirming before a suite
+ * goes red on it. Observed on the skills tier, where task and judge were both deepseek-chat: CI
+ * returned five FAILs with five empty quotes on a report that scored 5/5 twice locally on the
+ * same two models.
+ */
+export function isDegenerate(results: Verdict["results"]): boolean {
+  return results.length > 0 && results.every((r) => !r.passed && !r.evidence?.trim());
+}
+
+/**
  * Judge an output against a list of practices. Model defaults to the stronger judge family.
  *
  * The judge runs on whatever model EVAL_JUDGE_MODEL selects — including cheap ones that
  * occasionally break their own JSON. On an unparseable reply we retry ONCE with an explicit
  * "valid JSON only" correction (a different prompt yields a different completion even at
  * temperature 0); only if that also fails do we surface the error.
+ *
+ * A parseable but fully degenerate verdict gets one second opinion. If the second verdict is
+ * degenerate too, the FIRST one is kept and the case fails — this asks for confirmation, it
+ * never converts a real zero into a pass. Both the retry and its outcome are logged, because a
+ * suite that needs them regularly is telling you its judge is too weak for its practices.
  */
 export async function llmJudge(output: string, practices: string[], model = EVAL_JUDGE_MODEL): Promise<Verdict> {
   const listed = practices.map((p, i) => `${i + 1}. ${p}`).join("\n");
@@ -64,6 +83,19 @@ export async function llmJudge(output: string, practices: string[], model = EVAL
     results = parseVerdict(res.text);
   }
   if (!results) throw new Error(`judge returned no parseable JSON after retry: ${res.text.slice(0, 200)}`);
+
+  if (isDegenerate(results)) {
+    console.warn(
+      `  [judge] ${results.length}/${results.length} FAIL with no evidence quoted — asking once more (model=${model})`,
+    );
+    const second = parseVerdict((await runContent(prompt, { allowedTools: [], maxTurns: 1, model })).text);
+    if (second && !isDegenerate(second)) {
+      console.warn(`  [judge] second opinion differs — using it (${second.filter((r) => r.passed).length}/${second.length} pass)`);
+      results = second;
+    } else {
+      console.warn("  [judge] second opinion agrees — keeping the zero");
+    }
+  }
 
   const total = results.length || 1;
   const passed = results.filter((r) => r.passed).length;

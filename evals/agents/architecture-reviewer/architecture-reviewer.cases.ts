@@ -3,7 +3,30 @@ import { fixtureReader } from "../../src/index.js";
 
 const fx = fixtureReader(import.meta.url);
 
+/**
+ * Where the authoritative docs live. Named here, not left to be discovered.
+ *
+ * The agent may not call anything a violation until it has read the repo's own docs (Method
+ * step 2), and it runs with settingSources: [] — no CLAUDE.md, no skills loaded — so it has to
+ * find them itself with Glob/Grep from the repo root. Whether it does is luck. Across four CI
+ * runs of this suite the checkout case spent 10, 13 and 21 tool calls and passed, then spent 3,
+ * declined to file anything ("I cannot cite them as violations without the repo's own documented
+ * contracts"), and scored 0/6. Nothing about the agent or the case had changed between them.
+ *
+ * This gives away no answer: the agent still has to read the docs, map the diff onto them, pick
+ * the right rule identifier and assign a severity. It only removes the search lottery, so a red
+ * run means the agent reviewed badly rather than that it failed to locate a file. Shared by the
+ * strict and lite variants, so the A/B stays symmetric.
+ */
+const DOC_MAP = `The authoritative documents are in this repository. Read the ones governing the
+layers your audited set touches — do not ask the caller for them:
+- CLAUDE.md (root)
+- server/CLAUDE.md and server/docs/architecture.md
+- reviewer-core/CLAUDE.md and reviewer-core/docs/pipeline.md`;
+
 const REVIEW_PROMPT = `Audit this diff against DevDigest's documented structural contracts.
+
+${DOC_MAP}
 
 ${fx("checkout-service.diff")}`;
 
@@ -16,6 +39,8 @@ ${fx("checkout-service.diff")}`;
 // discriminate — the model volunteers `inward-only-dependencies`/`di-discipline` either way.
 const REVIEWER_CORE_PROMPT = `Audit this diff against DevDigest's documented structural contracts.
 
+${DOC_MAP}
+
 ${fx("reviewer-core-gate.diff")}`;
 
 // A diff that violates NO documented rule (a pure local-variable rename inside a domain file, no
@@ -24,6 +49,8 @@ ${fx("reviewer-core-gate.diff")}`;
 // documented contract", the lite variant is more prone to fabricating a judgment/best-practice
 // finding where the strict variant stays silent.
 const BENIGN_PROMPT = `Audit this diff against DevDigest's documented structural contracts.
+
+${DOC_MAP}
 
 ${fx("benign-refactor.diff")}`;
 
@@ -52,7 +79,7 @@ export const cases: AgentCase[] = [
     prompt: REVIEW_PROMPT,
     practices: [
       "does not raise a runtime-bug, null-safety, or security finding about the optional `reply?: FastifyReply` parameter — citing it as part of the same inward-only-dependencies layering violation (domain signature referencing a framework type) is correct and expected, not a fabrication",
-      "stays scoped to structural/layering/DI findings and does not comment on naming, style, or test coverage",
+      "stays scoped to structural/layering/DI findings — it does not file SEPARATE findings about naming, style, or test coverage. Naming testability or coupling as the consequence of a DI or layering violation it has already raised belongs to that finding and is not scope creep",
     ],
     threshold: 1.0,
     maxTurns: 25,
