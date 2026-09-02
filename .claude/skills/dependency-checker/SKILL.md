@@ -119,5 +119,7 @@ Structure the final output in exactly this order, with these headings:
 
 Do not omit a section even if empty — state "none found" explicitly so the report reads as complete rather than partial.
 
+Every removal recommendation must quote the **exclusive** size, not the total. `total` is what a dependency drags in; `exclusive` is what actually disappears if it goes. They diverge sharply — a package can total 24 MB and free 0.4 MB because it shares almost everything with a sibling — so a recommendation quoting `total` overstates its own payoff by the difference.
+
 <!-- Every finding must carry an explicit severity; an unprioritized finding is treated as incomplete. -->
 
