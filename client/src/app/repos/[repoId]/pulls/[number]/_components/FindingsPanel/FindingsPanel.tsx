@@ -18,11 +18,16 @@ export function FindingsPanel({
   prId,
   repoFullName,
   headSha,
+  onEvalCase,
+  evalCasePending,
 }: {
   findings: FindingRecord[];
   prId: string;
   repoFullName?: string | null;
   headSha?: string | null;
+  /** "Turn into eval case" (L06) — wired by ReviewRunAccordion, per finding id. */
+  onEvalCase?: (findingId: string) => void;
+  evalCasePending?: boolean;
 }) {
   const t = useTranslations("prReview");
   const action = useFindingAction();
@@ -98,6 +103,8 @@ export function FindingsPanel({
               repoFullName={repoFullName}
               headSha={headSha}
               onAction={(act) => action.mutate({ findingId: f.id, action: act, prId })}
+              onEvalCase={onEvalCase ? () => onEvalCase(f.id) : undefined}
+              evalCasePending={evalCasePending}
             />
           ))
         )}

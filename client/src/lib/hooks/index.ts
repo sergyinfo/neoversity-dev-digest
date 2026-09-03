@@ -12,3 +12,4 @@ export * from "./smart-diff";
 export * from "./blast";
 export * from "./project-context";
 export * from "./retro";
+export * from "./evals";

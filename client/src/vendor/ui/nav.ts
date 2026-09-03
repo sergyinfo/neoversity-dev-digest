@@ -32,6 +32,10 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "skills", label: "Skills", icon: "Sparkles", href: "/skills", gKey: "s" },
       { key: "conventions", label: "Conventions", icon: "ListChecks", href: "/conventions", gKey: "c" },
+      /* L06 — `activeKeyFor` already maps `/eval` → "eval" and `shell.json`'s
+         `nav.eval` already exists (command palette only, per the note below);
+         this literal is the only missing half for the SIDEBAR row. */
+      { key: "eval", label: "Eval Dashboard", icon: "FlaskConical", href: "/eval" },
       /* `label` is rendered as a LITERAL by NavItem.tsx — the sidebar copy is not
          i18n-bound. The parallel `nav.retro` key in messages/en/shell.json is
          real but feeds only the command palette (useShellCommands.ts). Both are

@@ -31,6 +31,8 @@ export function FindingCard({
   pending,
   repoFullName,
   headSha,
+  onEvalCase,
+  evalCasePending,
 }: {
   f: FindingRecord;
   focused?: boolean;
@@ -39,6 +41,9 @@ export function FindingCard({
   pending?: boolean;
   repoFullName?: string | null;
   headSha?: string | null;
+  /** "Turn into eval case" (L06). Undefined when the caller doesn't wire it. */
+  onEvalCase?: () => void;
+  evalCasePending?: boolean;
 }) {
   const t = useTranslations("prReview");
   const [expanded, setExpanded] = React.useState(defaultExpanded ?? false);
@@ -108,6 +113,17 @@ export function FindingCard({
               onClick={() => onAction?.("dismiss")}
             >
               {t("finding.dismiss")}
+            </Button>
+            <Button
+              kind="tertiary"
+              size="sm"
+              icon="FlaskConical"
+              disabled={!muted || evalCasePending}
+              loading={evalCasePending}
+              title={!muted ? t("finding.evalCaseDisabledReason") : undefined}
+              onClick={() => onEvalCase?.()}
+            >
+              {t("finding.evalCase")}
             </Button>
           </div>
         </div>

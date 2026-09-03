@@ -58,3 +58,48 @@ describe("FindingCard (smoke, both themes)", () => {
     expect(onAction).toHaveBeenCalledWith("dismiss");
   });
 });
+
+describe("FindingCard — Turn into eval case (L06, AC-3)", () => {
+  it("is disabled with a reason tooltip when the finding is unlabelled", () => {
+    const onEvalCase = vi.fn();
+    renderWithIntl(<FindingCard f={FINDING} defaultExpanded onEvalCase={onEvalCase} />);
+    const button = screen.getByText("Turn into eval case").closest("button")!;
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute(
+      "title",
+      "Accept or dismiss this finding first — an unlabelled finding is not a data point.",
+    );
+    fireEvent.click(button);
+    expect(onEvalCase).not.toHaveBeenCalled();
+  });
+
+  it("is enabled and invoked when the finding is accepted", () => {
+    const onEvalCase = vi.fn();
+    renderWithIntl(
+      <FindingCard
+        f={{ ...FINDING, accepted_at: "2026-08-01T00:00:00Z" }}
+        defaultExpanded
+        onEvalCase={onEvalCase}
+      />,
+    );
+    const button = screen.getByText("Turn into eval case").closest("button")!;
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button);
+    expect(onEvalCase).toHaveBeenCalledTimes(1);
+  });
+
+  it("is enabled and invoked when the finding is dismissed", () => {
+    const onEvalCase = vi.fn();
+    renderWithIntl(
+      <FindingCard
+        f={{ ...FINDING, dismissed_at: "2026-08-01T00:00:00Z" }}
+        defaultExpanded
+        onEvalCase={onEvalCase}
+      />,
+    );
+    const button = screen.getByText("Turn into eval case").closest("button")!;
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button);
+    expect(onEvalCase).toHaveBeenCalledTimes(1);
+  });
+});
