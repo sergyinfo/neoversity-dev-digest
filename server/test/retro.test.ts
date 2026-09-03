@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from '../src/app.js';
+import type { Db } from '../src/db/client.js';
 import { loadConfig } from '../src/platform/config.js';
 import { RetroLedger } from '../src/modules/retro/contract.js';
 import { LEDGER_REL_PATH, readLedger } from '../src/modules/retro/ledger.js';
@@ -37,9 +38,33 @@ afterEach(() => {
   vi.doUnmock('node:fs/promises');
 });
 
+/**
+ * `/retro/ledger` reads a committed FILE, but its handler still resolves tenancy
+ * through `getContext` → `LocalNoAuthProvider`, which QUERIES THE DATABASE. Built
+ * with only `{ config }`, this suite therefore opened a real connection: on a dev
+ * machine that silently succeeded against whatever Postgres happened to be up, and
+ * in CI — where the unit job runs without a database — every request hung for the 5s
+ * connect timeout and returned 500. A test in the DB-free suite must not need a DB.
+ */
+function emptyDb(): Db {
+  const chain: unknown = new Proxy(function noop() {} as object, {
+    get(_t, prop) {
+      if (prop === 'then') return (resolve: (v: unknown) => void) => resolve([]);
+      return () => chain;
+    },
+    apply: () => chain,
+  });
+  return chain as Db;
+}
+
+const auth = {
+  currentUser: async () => ({ id: 'user-1', email: 'a@b.c', name: 'Test' }),
+  currentWorkspace: async () => ({ id: '22222222-2222-4222-8222-222222222222', name: 'default' }),
+};
+
 describe('GET /retro/ledger', () => {
   it('is registered', async () => {
-    const app = await buildApp({ config });
+    const app = await buildApp({ config, db: emptyDb(), overrides: { auth } });
     expect(app.hasRoute({ method: 'GET', url: '/retro/ledger' })).toBe(true);
     await app.close();
   });
@@ -50,7 +75,7 @@ describe('GET /retro/ledger', () => {
       stat(LEDGER_ABS),
     ]);
 
-    const app = await buildApp({ config });
+    const app = await buildApp({ config, db: emptyDb(), overrides: { auth } });
     const res = await app.inject({ method: 'GET', url: '/retro/ledger' });
     await app.close();
 
@@ -78,7 +103,7 @@ describe('GET /retro/ledger', () => {
    * The route must serve that as ordinary content, not as "no data".
    */
   it('serves the entries marker, so the client can tell an empty ledger from a full one', async () => {
-    const app = await buildApp({ config });
+    const app = await buildApp({ config, db: emptyDb(), overrides: { auth } });
     const res = await app.inject({ method: 'GET', url: '/retro/ledger' });
     await app.close();
 
@@ -86,7 +111,7 @@ describe('GET /retro/ledger', () => {
   });
 
   it('takes no path input at all — a query string cannot redirect the read', async () => {
-    const app = await buildApp({ config });
+    const app = await buildApp({ config, db: emptyDb(), overrides: { auth } });
     const clean = await app.inject({ method: 'GET', url: '/retro/ledger' });
     const attempt = await app.inject({
       method: 'GET',
