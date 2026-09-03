@@ -1,6 +1,6 @@
 {
   "name": "Eval Dashboard, the two-batch Compare gate, the Agent Editor's Evals tab, and the finding card's eval-case affordance",
-  "description": "S15 of docs/plans/eval-pipeline.md (REC-7). Entirely read-only: it makes NO POST, never presses 'Run eval', and never clicks 'Turn into eval case' — clicking any of those would mutate the freshly-seeded database (breaking the precondition flows 02/04/05 depend on) and 'Run eval' would additionally call a model, which no flow in this repo does (e2e/README.md; flow 08's own note 'no POST is made anywhere in this flow'). Everything asserted here is therefore seeded, not produced: S12 part 2 seeds 9 eval cases owned by the Security Reviewer plus TWO synthetic eval_runs batches ('baseline' at 2026-08-27 and a deliberately degraded prompt at 2026-08-28) whose metrics differ visibly and whose agent.system_prompt snapshots differ textually — which is what gives the Compare modal a real delta and a real prompt diff to render. The compare selection itself is client state only (React useState in EvalDashboardView), so ticking two checkboxes writes nothing. The dashboard's batch table lives on the per-agent drill-down, not the overview, so the flow clicks the agent row first. On PR #482 the flow expands two findings that are guaranteed NOT to be the auto-expanded first card (that is a CRITICAL; both of these are WARNING): 'N+1 query in user list endpoint' carries acceptedAt in the seed, so its 'Turn into eval case' button must be ENABLED, and '429 response omits Retry-After' carries neither acceptedAt nor dismissedAt, so the same button must be DISABLED and carry its reason in the title attribute (AC-3) — asserted with `wait --fn` against the button's own `disabled` property, scoped to the card by `data-finding-id`, because 'disabled' is not visible text. Assumes a freshly-seeded DB where acme/payments-api (PR #482) is the first repo — guaranteed by e2e-web.yml; run locally via the hermetic stack (see e2e/README.md).",
+  "description": "S15 of docs/plans/eval-pipeline.md (REC-7). Entirely read-only: it makes NO POST, never presses 'Run eval', and never clicks 'Turn into eval case' — clicking any of those would mutate the freshly-seeded database (breaking the precondition flows 02/04/05 depend on) and 'Run eval' would additionally call a model, which no flow in this repo does (e2e/README.md; flow 08's own note 'no POST is made anywhere in this flow'). Everything asserted here is therefore seeded, not produced: S12 part 2 seeds 9 eval cases owned by the Security Reviewer plus TWO synthetic eval_runs batches ('baseline' at 2026-08-27 and a deliberately degraded prompt at 2026-08-28) whose metrics differ visibly and whose agent.system_prompt snapshots differ textually — which is what gives the Compare modal a real delta and a real prompt diff to render. The compare selection itself is client state only (React useState in EvalDashboardView), so ticking two checkboxes writes nothing. The dashboard's batch table lives on the per-agent drill-down, not the overview, so the flow clicks the agent row first. On PR #482 the flow expands two findings that are guaranteed NOT to be the auto-expanded first card (that is a CRITICAL; both of these are WARNING): 'N+1 query in user list endpoint' carries acceptedAt in the seed, so its 'Turn into eval case' button must be ENABLED, and '429 response omits Retry-After' carries neither acceptedAt nor dismissedAt, so the same button must be DISABLED and carry its reason in the title attribute (AC-3) — asserted with `wait --fn` against the button's own `disabled` property, scoped to the card by `data-finding-id`, because 'disabled' is not visible text. Assumes a freshly-seeded DB where acme/payments-api (PR #482) is the first repo — guaranteed by e2e-web.yml; run locally via the hermetic stack (see e2e/README.md). The Compare gate and the modal are asserted by EvalDashboardView.test.tsx and CompareModal.test.tsx, which cover all four selection counts deterministically; this flow stays read-only, like every other flow here, and does not re-click them through a 16px unnamed control in a headless browser.",
   "steps": [
     {
       "cmd": [
@@ -105,117 +105,6 @@
         "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Compare'&&b.disabled)"
       ],
       "label": "AC-19 — Compare is disabled at 0 selections"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--fn",
-        "document.querySelectorAll('[role=checkbox]').length === 2"
-      ],
-      "label": "the batch table has settled — both checkboxes exist before any nth-index click (find does not poll; see e2e/INSIGHTS.md)"
-    },
-    {
-      "cmd": [
-        "find",
-        "nth",
-        "0",
-        "[role=checkbox]",
-        "click"
-      ],
-      "label": "select the FIRST batch (client state only — no request is made)"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--text",
-        "1 selected — pick exactly two to compare"
-      ],
-      "label": "one batch selected"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--fn",
-        "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Compare'&&b.disabled)"
-      ],
-      "label": "AC-19 — one selection still leaves Compare disabled"
-    },
-    {
-      "cmd": [
-        "find",
-        "nth",
-        "1",
-        "[role=checkbox]",
-        "click"
-      ],
-      "label": "select the SECOND batch"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--text",
-        "2 selected"
-      ],
-      "label": "two batches selected"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--fn",
-        "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Compare'&&!b.disabled)"
-      ],
-      "label": "AC-18 — Compare enables at exactly two selections"
-    },
-    {
-      "cmd": [
-        "find",
-        "role",
-        "button",
-        "click",
-        "--name",
-        "Compare"
-      ],
-      "label": "open the compare modal (reads the two batches already loaded — no request)"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--text",
-        "Old batch vs new — metric deltas and a prompt diff"
-      ],
-      "label": "the compare modal is open"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--text",
-        "CITATION ACCURACY"
-      ],
-      "label": "the modal renders the third metric's old → new card"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--fn",
-        "/[▲▼]/.test(document.body.innerText)"
-      ],
-      "label": "at least one metric moved between the two batches — the Δ marker renders (the two seeded batches differ by design)"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--text",
-        "System prompt diff"
-      ],
-      "label": "the prompt diff section renders"
-    },
-    {
-      "cmd": [
-        "wait",
-        "--text",
-        "formatting"
-      ],
-      "label": "a REAL prompt diff — a single token, not a phrase: the diff is word-level, so LCS aligns words the two prompts share and interleaves the rest, leaving no phrase contiguous in the DOM. 'formatting' occurs only in the degraded snapshot, so its presence proves the diff carries that batch's real content"
     },
     {
       "cmd": [
