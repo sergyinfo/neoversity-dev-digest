@@ -108,6 +108,14 @@
     },
     {
       "cmd": [
+        "wait",
+        "--fn",
+        "document.querySelectorAll('[role=checkbox]').length === 2"
+      ],
+      "label": "the batch table has settled — both checkboxes exist before any nth-index click (find does not poll; see e2e/INSIGHTS.md)"
+    },
+    {
+      "cmd": [
         "find",
         "nth",
         "0",
